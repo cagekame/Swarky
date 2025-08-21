@@ -310,8 +310,7 @@ def parse_args(argv: List[str]):
     import argparse
     ap = argparse.ArgumentParser(description="Swarky - batch archiviazione/EDI")
     ap.add_argument("--config", type=str, default="config.toml", help="Percorso file di configurazione TOML")
-    ap.add_argument("--run-once", action="store_true", help="Esegue una passata (archivio + ISS + FIV)")
-    ap.add_argument("--watch", type=int, default=0, help="Loop di polling in secondi, 0=disattivato")
+    ap.add_argument("--watch", type=int, default=0, help="Loop di polling in secondi, 0=esegue una sola passata")
     ap.add_argument("--debug", action="store_true", help="Abilita logging DEBUG")
     return ap.parse_args(argv)
 
