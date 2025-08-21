@@ -125,21 +125,32 @@ def write_lines(p: Path, lines: List[str]):
 
 # ---- MAPPATURE E VALIDAZIONI ---------------------------------------------------------
 
+LOCATION_MAP = {
+    ("M", "*"): ("costruttivi", "Costruttivi", "m", "DETAIL", "Italian"),
+    ("K", "*"): ("bozzetti", "Bozzetti", "k", "Customer Drawings", "English"),
+    ("F", "*"): ("fornitori", "Fornitori", "f", "Vendor Supplied Data", "English"),
+    ("T", "*"): ("tenute_meccaniche", "T_meccaniche", "t", "Customer Drawings", "English"),
+    ("E", "*"): ("sezioni", "Sezioni", "s", "Customer Drawings", "English"),
+    ("S", "*"): ("sezioni", "Sezioni", "s", "Customer Drawings", "English"),
+    ("N", "*"): ("marcianise", "Marcianise", "n", "DETAIL", "Italian"),
+    ("P", "*"): ("preventivi", "Preventivi", "p", "Customer Drawings", "English"),
+    ("*", "4"): ("pID_ELETTRICI", "Pid_Elettrici", "m", "Customer Drawings", "Italian"),
+    ("*", "5"): ("piping", "Piping", "m", "Customer Drawings", "Italian"),
+}
+
+DEFAULT_LOCATION = ("unknown", "Unknown", "m", "Customer Drawings", "English")
+
+
 def map_location(m: re.Match, cfg: Config) -> dict:
     first = m.group(3)[0]
     l2 = m.group(2).upper()
-    out = {}
-    if l2 == "M" and first not in ("4","5"): out = ("costruttivi","Costruttivi","m","DETAIL","Italian")
-    elif l2 == "K": out = ("bozzetti","Bozzetti","k","Customer Drawings","English")
-    elif l2 == "F": out = ("fornitori","Fornitori","f","Vendor Supplied Data","English")
-    elif l2 == "T": out = ("tenute_meccaniche","T_meccaniche","t","Customer Drawings","English")
-    elif l2 in ("E","S"): out = ("sezioni","Sezioni","s","Customer Drawings","English")
-    elif l2 == "N": out = ("marcianise","Marcianise","n","DETAIL","Italian")
-    elif l2 == "P": out = ("preventivi","Preventivi","p","Customer Drawings","English")
-    elif first == "4": out = ("pID_ELETTRICI","Pid_Elettrici","m","Customer Drawings","Italian")
-    elif first == "5": out = ("piping","Piping","m","Customer Drawings","Italian")
-    else: out = ("unknown","Unknown","m","Customer Drawings","English")
-    folder, log_name, subloc, doctype, lang = out
+    loc = (
+        LOCATION_MAP.get((l2, first))
+        or LOCATION_MAP.get((l2, "*"))
+        or LOCATION_MAP.get(("*", first))
+        or DEFAULT_LOCATION
+    )
+    folder, log_name, subloc, doctype, lang = loc
     arch_tif_loc = m.group(1).upper() + subloc
     dir_tif_loc = cfg.ARCHIVIO_DISEGNI / folder / arch_tif_loc
     return dict(folder=folder, log_name=log_name, subloc=subloc, doctype=doctype, lang=lang, arch_tif_loc=arch_tif_loc, dir_tif_loc=dir_tif_loc)
