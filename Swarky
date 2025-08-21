@@ -265,7 +265,7 @@ def iss_loading(cfg: Config):
             "DesignCenter=Desio, Italy","OEMSite=Desio, Italy","OEMDrawingNumber=","UOM=Metric","DWGLanguage=English",
             "CurrentRevision=Y","EnteredBy=10150286","Notes=","NonEnglishDesc=","SupersededBy=","NumberOfStages=",
             "[DrawingInfo]",f"DocumentNo={docno}",f"SheetNumber={m.group(5)}","Document_Type=Detail",
-            f"DocumentRev={m.group(5)}",f"FileName={p.name}","FileType=Pdf",f"Currentdate={now.strftime('%Y-%m-%d %H:%M:%S')}"
+            f"DocumentRev={m.group(4)}",f"FileName={p.name}","FileType=Pdf",f"Currentdate={now.strftime('%Y-%m-%d %H:%M:%S')}"
         ]
         write_lines(edi, body)
         log = cfg.DIR_ISS/"SwarkyISS.log"
