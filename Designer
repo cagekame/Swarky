@@ -1,0 +1,414 @@
+<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()>
+Partial Class Swarky
+    Inherits System.Windows.Forms.Form
+
+    'Form esegue l'override del metodo Dispose per pulire l'elenco dei componenti.
+    <System.Diagnostics.DebuggerNonUserCode()>
+    Protected Overrides Sub Dispose(ByVal disposing As Boolean)
+        Try
+            If disposing AndAlso components IsNot Nothing Then
+                components.Dispose()
+            End If
+        Finally
+            MyBase.Dispose(disposing)
+        End Try
+    End Sub
+
+    'Richiesto da Progettazione Windows Form
+    Private components As System.ComponentModel.IContainer
+
+    'NOTA: la procedura che segue è richiesta da Progettazione Windows Form
+    'Può essere modificata in Progettazione Windows Form.  
+    'Non modificarla mediante l'editor del codice.
+    <System.Diagnostics.DebuggerStepThrough()>
+    Private Sub InitializeComponent()
+        Me.components = New System.ComponentModel.Container()
+        Dim resources As System.ComponentModel.ComponentResourceManager = New System.ComponentModel.ComponentResourceManager(GetType(Swarky))
+        Me.Hplotter = New System.Windows.Forms.ListBox()
+        Me.ProcessLog = New System.Windows.Forms.ListView()
+        Me.ColumnHeader1 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.ColumnHeader2 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.ColumnHeader3 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.ColumnHeader4 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.ColumnHeader7 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.ColumnHeader8 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.Rivedere = New System.Windows.Forms.ListView()
+        Me.ColumnHeader5 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.ColumnHeader6 = CType(New System.Windows.Forms.ColumnHeader(), System.Windows.Forms.ColumnHeader)
+        Me.MenuStrip = New System.Windows.Forms.ContextMenuStrip(Me.components)
+        Me.RenameToolStripMenuItem = New System.Windows.Forms.ToolStripMenuItem()
+        Me.AddToHplotterToolStripMenuItem = New System.Windows.Forms.ToolStripMenuItem()
+        Me.SwarkedFileToolStripMenuItem = New System.Windows.Forms.ToolStripMenuItem()
+        Me.Label1 = New System.Windows.Forms.Label()
+        Me.Label2 = New System.Windows.Forms.Label()
+        Me.Label3 = New System.Windows.Forms.Label()
+        Me.Timer1 = New System.Windows.Forms.Timer(Me.components)
+        Me.ButtonPaths = New System.Windows.Forms.Button()
+        Me.ArchiviaButton = New System.Windows.Forms.Button()
+        Me.Nfile = New System.Windows.Forms.Label()
+        Me.GENEDI = New System.Windows.Forms.Button()
+        Me.TabNumb = New System.Windows.Forms.Button()
+        Me.FSRsw = New System.Windows.Forms.Button()
+        Me.KaltError = New System.Windows.Forms.Label()
+        Me.CountFSRtif = New System.Windows.Forms.Label()
+        Me.CountCheckTif = New System.Windows.Forms.Label()
+        Me.CountHengTif = New System.Windows.Forms.Label()
+        Me.CountTabTif = New System.Windows.Forms.Label()
+        Me.CountKalTif = New System.Windows.Forms.Label()
+        Me.HPDIR = New System.Windows.Forms.Button()
+        Me.ThisDay = New System.Windows.Forms.Label()
+        Me.Sonole17 = New System.Windows.Forms.Timer(Me.components)
+        Me.MenuStrip.SuspendLayout()
+        Me.SuspendLayout()
+        '
+        'Hplotter
+        '
+        Me.Hplotter.BackColor = System.Drawing.Color.Navy
+        Me.Hplotter.Font = New System.Drawing.Font("Consolas", 9.75!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.Hplotter.ForeColor = System.Drawing.Color.LightGray
+        Me.Hplotter.FormattingEnabled = True
+        Me.Hplotter.ItemHeight = 15
+        Me.Hplotter.Location = New System.Drawing.Point(12, 45)
+        Me.Hplotter.Name = "Hplotter"
+        Me.Hplotter.Size = New System.Drawing.Size(148, 244)
+        Me.Hplotter.TabIndex = 0
+        '
+        'ProcessLog
+        '
+        Me.ProcessLog.BackColor = System.Drawing.Color.Navy
+        Me.ProcessLog.Columns.AddRange(New System.Windows.Forms.ColumnHeader() {Me.ColumnHeader1, Me.ColumnHeader2, Me.ColumnHeader3, Me.ColumnHeader4, Me.ColumnHeader7, Me.ColumnHeader8})
+        Me.ProcessLog.Font = New System.Drawing.Font("Consolas", 9.75!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.ProcessLog.ForeColor = System.Drawing.Color.LightGray
+        Me.ProcessLog.Location = New System.Drawing.Point(503, 45)
+        Me.ProcessLog.Name = "ProcessLog"
+        Me.ProcessLog.Size = New System.Drawing.Size(769, 386)
+        Me.ProcessLog.TabIndex = 3
+        Me.ProcessLog.UseCompatibleStateImageBehavior = False
+        Me.ProcessLog.View = System.Windows.Forms.View.Details
+        '
+        'ColumnHeader1
+        '
+        Me.ColumnHeader1.Text = "Date"
+        Me.ColumnHeader1.Width = 100
+        '
+        'ColumnHeader2
+        '
+        Me.ColumnHeader2.Text = "Time"
+        Me.ColumnHeader2.Width = 70
+        '
+        'ColumnHeader3
+        '
+        Me.ColumnHeader3.Text = "Name"
+        Me.ColumnHeader3.Width = 156
+        '
+        'ColumnHeader4
+        '
+        Me.ColumnHeader4.Text = "Location"
+        Me.ColumnHeader4.Width = 114
+        '
+        'ColumnHeader7
+        '
+        Me.ColumnHeader7.Text = "Process"
+        Me.ColumnHeader7.Width = 141
+        '
+        'ColumnHeader8
+        '
+        Me.ColumnHeader8.Text = "Archive Dwg"
+        Me.ColumnHeader8.Width = 160
+        '
+        'Rivedere
+        '
+        Me.Rivedere.BackColor = System.Drawing.Color.Navy
+        Me.Rivedere.Columns.AddRange(New System.Windows.Forms.ColumnHeader() {Me.ColumnHeader5, Me.ColumnHeader6})
+        Me.Rivedere.ContextMenuStrip = Me.MenuStrip
+        Me.Rivedere.Font = New System.Drawing.Font("Consolas", 9.75!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.Rivedere.ForeColor = System.Drawing.Color.LightGray
+        Me.Rivedere.Location = New System.Drawing.Point(166, 45)
+        Me.Rivedere.Name = "Rivedere"
+        Me.Rivedere.Size = New System.Drawing.Size(331, 386)
+        Me.Rivedere.TabIndex = 5
+        Me.Rivedere.UseCompatibleStateImageBehavior = False
+        Me.Rivedere.View = System.Windows.Forms.View.Details
+        '
+        'ColumnHeader5
+        '
+        Me.ColumnHeader5.Text = "Name"
+        Me.ColumnHeader5.Width = 169
+        '
+        'ColumnHeader6
+        '
+        Me.ColumnHeader6.Text = "ErrorType"
+        Me.ColumnHeader6.Width = 155
+        '
+        'MenuStrip
+        '
+        Me.MenuStrip.Items.AddRange(New System.Windows.Forms.ToolStripItem() {Me.RenameToolStripMenuItem, Me.AddToHplotterToolStripMenuItem, Me.SwarkedFileToolStripMenuItem})
+        Me.MenuStrip.Name = "MenuStrip"
+        Me.MenuStrip.Size = New System.Drawing.Size(160, 70)
+        '
+        'RenameToolStripMenuItem
+        '
+        Me.RenameToolStripMenuItem.Name = "RenameToolStripMenuItem"
+        Me.RenameToolStripMenuItem.Size = New System.Drawing.Size(159, 22)
+        Me.RenameToolStripMenuItem.Text = "Rename"
+        '
+        'AddToHplotterToolStripMenuItem
+        '
+        Me.AddToHplotterToolStripMenuItem.Name = "AddToHplotterToolStripMenuItem"
+        Me.AddToHplotterToolStripMenuItem.Size = New System.Drawing.Size(159, 22)
+        Me.AddToHplotterToolStripMenuItem.Text = "Add To Hplotter"
+        '
+        'SwarkedFileToolStripMenuItem
+        '
+        Me.SwarkedFileToolStripMenuItem.Name = "SwarkedFileToolStripMenuItem"
+        Me.SwarkedFileToolStripMenuItem.Size = New System.Drawing.Size(159, 22)
+        Me.SwarkedFileToolStripMenuItem.Text = "Swarked file"
+        '
+        'Label1
+        '
+        Me.Label1.AutoSize = True
+        Me.Label1.Font = New System.Drawing.Font("Consolas", 12.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.Label1.Location = New System.Drawing.Point(40, 23)
+        Me.Label1.Name = "Label1"
+        Me.Label1.Size = New System.Drawing.Size(90, 19)
+        Me.Label1.TabIndex = 6
+        Me.Label1.Text = "H-PLOTTER"
+        Me.Label1.TextAlign = System.Drawing.ContentAlignment.TopCenter
+        '
+        'Label2
+        '
+        Me.Label2.AutoSize = True
+        Me.Label2.Font = New System.Drawing.Font("Consolas", 12.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.Label2.Location = New System.Drawing.Point(297, 23)
+        Me.Label2.Name = "Label2"
+        Me.Label2.Size = New System.Drawing.Size(54, 19)
+        Me.Label2.TabIndex = 7
+        Me.Label2.Text = "CHECK"
+        '
+        'Label3
+        '
+        Me.Label3.AutoSize = True
+        Me.Label3.Font = New System.Drawing.Font("Consolas", 12.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.Label3.Location = New System.Drawing.Point(840, 23)
+        Me.Label3.Name = "Label3"
+        Me.Label3.Size = New System.Drawing.Size(108, 19)
+        Me.Label3.TabIndex = 8
+        Me.Label3.Text = "PROCESS LOG"
+        '
+        'Timer1
+        '
+        Me.Timer1.Enabled = True
+        Me.Timer1.Interval = 1000
+        '
+        'ButtonPaths
+        '
+        Me.ButtonPaths.Location = New System.Drawing.Point(1116, 437)
+        Me.ButtonPaths.Name = "ButtonPaths"
+        Me.ButtonPaths.Size = New System.Drawing.Size(75, 30)
+        Me.ButtonPaths.TabIndex = 12
+        Me.ButtonPaths.Text = "PATHS"
+        Me.ButtonPaths.UseVisualStyleBackColor = True
+        '
+        'ArchiviaButton
+        '
+        Me.ArchiviaButton.Location = New System.Drawing.Point(1197, 438)
+        Me.ArchiviaButton.Name = "ArchiviaButton"
+        Me.ArchiviaButton.Size = New System.Drawing.Size(75, 30)
+        Me.ArchiviaButton.TabIndex = 9
+        Me.ArchiviaButton.Text = "SWARKY"
+        Me.ArchiviaButton.UseVisualStyleBackColor = True
+        '
+        'Nfile
+        '
+        Me.Nfile.AutoSize = True
+        Me.Nfile.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.Nfile.Location = New System.Drawing.Point(9, 292)
+        Me.Nfile.Name = "Nfile"
+        Me.Nfile.Size = New System.Drawing.Size(79, 13)
+        Me.Nfile.TabIndex = 13
+        Me.Nfile.Text = "N° Drawings:"
+        '
+        'GENEDI
+        '
+        Me.GENEDI.Location = New System.Drawing.Point(1035, 438)
+        Me.GENEDI.Name = "GENEDI"
+        Me.GENEDI.Size = New System.Drawing.Size(75, 30)
+        Me.GENEDI.TabIndex = 14
+        Me.GENEDI.Text = "EDI"
+        Me.GENEDI.UseVisualStyleBackColor = True
+        '
+        'TabNumb
+        '
+        Me.TabNumb.Location = New System.Drawing.Point(954, 438)
+        Me.TabNumb.Name = "TabNumb"
+        Me.TabNumb.Size = New System.Drawing.Size(75, 30)
+        Me.TabNumb.TabIndex = 15
+        Me.TabNumb.Text = "TABELLARI"
+        Me.TabNumb.UseVisualStyleBackColor = True
+        '
+        'FSRsw
+        '
+        Me.FSRsw.Location = New System.Drawing.Point(873, 438)
+        Me.FSRsw.Name = "FSRsw"
+        Me.FSRsw.Size = New System.Drawing.Size(75, 30)
+        Me.FSRsw.TabIndex = 16
+        Me.FSRsw.Text = "SAME REV"
+        Me.FSRsw.UseVisualStyleBackColor = True
+        '
+        'KaltError
+        '
+        Me.KaltError.AutoSize = True
+        Me.KaltError.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.KaltError.Location = New System.Drawing.Point(9, 392)
+        Me.KaltError.Name = "KaltError"
+        Me.KaltError.Size = New System.Drawing.Size(91, 13)
+        Me.KaltError.TabIndex = 18
+        Me.KaltError.Text = "N° KALT Error:"
+        '
+        'CountFSRtif
+        '
+        Me.CountFSRtif.AutoSize = True
+        Me.CountFSRtif.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.CountFSRtif.Location = New System.Drawing.Point(9, 312)
+        Me.CountFSRtif.Name = "CountFSRtif"
+        Me.CountFSRtif.Size = New System.Drawing.Size(103, 13)
+        Me.CountFSRtif.TabIndex = 13
+        Me.CountFSRtif.Text = "N° Same Rev Dwg:"
+        '
+        'CountCheckTif
+        '
+        Me.CountCheckTif.AutoSize = True
+        Me.CountCheckTif.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.CountCheckTif.Location = New System.Drawing.Point(9, 332)
+        Me.CountCheckTif.Name = "CountCheckTif"
+        Me.CountCheckTif.Size = New System.Drawing.Size(91, 13)
+        Me.CountCheckTif.TabIndex = 13
+        Me.CountCheckTif.Text = "N° Check Dwg: "
+        '
+        'CountHengTif
+        '
+        Me.CountHengTif.AutoSize = True
+        Me.CountHengTif.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.CountHengTif.Location = New System.Drawing.Point(9, 352)
+        Me.CountHengTif.Name = "CountHengTif"
+        Me.CountHengTif.Size = New System.Drawing.Size(85, 13)
+        Me.CountHengTif.TabIndex = 13
+        Me.CountHengTif.Text = "N° Heng Dwg: "
+        '
+        'CountTabTif
+        '
+        Me.CountTabTif.AutoSize = True
+        Me.CountTabTif.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.CountTabTif.Location = New System.Drawing.Point(9, 372)
+        Me.CountTabTif.Name = "CountTabTif"
+        Me.CountTabTif.Size = New System.Drawing.Size(79, 13)
+        Me.CountTabTif.TabIndex = 13
+        Me.CountTabTif.Text = "N° Tab Dwg: "
+        '
+        'CountKalTif
+        '
+        Me.CountKalTif.AutoSize = True
+        Me.CountKalTif.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.CountKalTif.Location = New System.Drawing.Point(9, 412)
+        Me.CountKalTif.Name = "CountKalTif"
+        Me.CountKalTif.Size = New System.Drawing.Size(79, 13)
+        Me.CountKalTif.TabIndex = 18
+        Me.CountKalTif.Text = "N° KALT Dwg:"
+        '
+        'HPDIR
+        '
+        Me.HPDIR.Location = New System.Drawing.Point(12, 437)
+        Me.HPDIR.Name = "HPDIR"
+        Me.HPDIR.Size = New System.Drawing.Size(130, 30)
+        Me.HPDIR.TabIndex = 19
+        Me.HPDIR.Text = "H PLOTTER FOLDER"
+        Me.HPDIR.UseVisualStyleBackColor = True
+        '
+        'ThisDay
+        '
+        Me.ThisDay.AutoSize = True
+        Me.ThisDay.Font = New System.Drawing.Font("Consolas", 8.25!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, CType(0, Byte))
+        Me.ThisDay.Location = New System.Drawing.Point(1142, 29)
+        Me.ThisDay.Name = "ThisDay"
+        Me.ThisDay.Size = New System.Drawing.Size(49, 13)
+        Me.ThisDay.TabIndex = 20
+        Me.ThisDay.Text = "ThisDay"
+        '
+        'Sonole17
+        '
+        Me.Sonole17.Enabled = True
+        Me.Sonole17.Interval = 1000
+        '
+        'Swarky
+        '
+        Me.AutoScaleDimensions = New System.Drawing.SizeF(6.0!, 13.0!)
+        Me.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font
+        Me.ClientSize = New System.Drawing.Size(1283, 480)
+        Me.Controls.Add(Me.ThisDay)
+        Me.Controls.Add(Me.HPDIR)
+        Me.Controls.Add(Me.CountKalTif)
+        Me.Controls.Add(Me.KaltError)
+        Me.Controls.Add(Me.FSRsw)
+        Me.Controls.Add(Me.TabNumb)
+        Me.Controls.Add(Me.GENEDI)
+        Me.Controls.Add(Me.CountTabTif)
+        Me.Controls.Add(Me.CountHengTif)
+        Me.Controls.Add(Me.CountCheckTif)
+        Me.Controls.Add(Me.CountFSRtif)
+        Me.Controls.Add(Me.Nfile)
+        Me.Controls.Add(Me.ButtonPaths)
+        Me.Controls.Add(Me.ArchiviaButton)
+        Me.Controls.Add(Me.Label3)
+        Me.Controls.Add(Me.Label2)
+        Me.Controls.Add(Me.Label1)
+        Me.Controls.Add(Me.Rivedere)
+        Me.Controls.Add(Me.ProcessLog)
+        Me.Controls.Add(Me.Hplotter)
+        Me.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle
+        Me.Icon = CType(resources.GetObject("$this.Icon"), System.Drawing.Icon)
+        Me.MaximizeBox = False
+        Me.Name = "Swarky"
+        Me.Text = "Swarky"
+        Me.MenuStrip.ResumeLayout(False)
+        Me.ResumeLayout(False)
+        Me.PerformLayout()
+
+    End Sub
+
+    Friend WithEvents Hplotter As ListBox
+    Friend WithEvents ProcessLog As ListView
+    Friend WithEvents Rivedere As ListView
+    Friend WithEvents ColumnHeader1 As ColumnHeader
+    Friend WithEvents ColumnHeader2 As ColumnHeader
+    Friend WithEvents Label1 As Label
+    Friend WithEvents Label2 As Label
+    Friend WithEvents Label3 As Label
+    Friend WithEvents ColumnHeader3 As ColumnHeader
+    Friend WithEvents ColumnHeader4 As ColumnHeader
+    Friend WithEvents ColumnHeader5 As ColumnHeader
+    Friend WithEvents ColumnHeader6 As ColumnHeader
+    Friend WithEvents StopButton As Button
+    Friend WithEvents ColumnHeader7 As ColumnHeader
+    Friend WithEvents Timer1 As Timer
+    Friend WithEvents MenuStrip As ContextMenuStrip
+    Friend WithEvents RenameToolStripMenuItem As ToolStripMenuItem
+    Friend WithEvents ButtonPaths As Button
+    Friend WithEvents AddToHplotterToolStripMenuItem As ToolStripMenuItem
+    Friend WithEvents ArchiviaONE As Button
+    Friend WithEvents ArchiviaButton As Button
+    Friend WithEvents Nfile As Label
+    Friend WithEvents ColumnHeader8 As ColumnHeader
+    Friend WithEvents GENEDI As Button
+    Friend WithEvents TabNumb As Button
+    Friend WithEvents FSRsw As Button
+    Friend WithEvents KaltError As Label
+    Friend WithEvents CountFSRtif As Label
+    Friend WithEvents CountCheckTif As Label
+    Friend WithEvents CountHengTif As Label
+    Friend WithEvents CountTabTif As Label
+    Friend WithEvents CountKalTif As Label
+    Friend WithEvents HPDIR As Button
+    Friend WithEvents SwarkedFileToolStripMenuItem As ToolStripMenuItem
+    Friend WithEvents ThisDay As Label
+    Friend WithEvents Sonole17 As Timer
+End Class
