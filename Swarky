@@ -1,0 +1,1064 @@
+
+Imports System.Text.RegularExpressions
+Imports System.Timers
+Imports System.Threading
+Imports System.Threading.Tasks
+Imports System.Text
+Public Class Swarky
+
+    Dim BaseName As String = "D(\w{1})(\w{1})(\d{6})R(\d{2})S(\d{2})(\w{1}).tif"
+    Dim ISSbasename As String = "G(\d{4})(\w{3})(\d{7})ISSR(\d{2})S(\d{2}).pdf"
+    Dim MatchFileName As String
+    Dim BeckRev As Boolean
+    Dim FromHyBackNormalBasename As String
+    Dim MemoryHy As String
+    Dim FileHy As String
+    Dim FileNameH As String
+    Dim DwgArchivio As String
+    Dim SubStringNum As String
+    Dim ArchivioStorico As String
+    Dim ArchivioDisegni As String
+    Dim ErrorDir As String
+    Dim DirHplotter As String
+    Dim PlmDir As String
+    Dim PariRev As String
+    Dim DirTifLoc As String
+    Dim FolderTifLoc As String
+    Dim TiflocationForLog As String
+    Dim SubLocation As String
+    Dim ArchTifLoc As String
+    Dim ErrType As String
+    Dim Process As String
+    Dim ChkDwg As Boolean
+    Dim ChkRev As String
+    Dim ChkSht As String
+    Dim ChkMet As String
+    Dim ChkTifRot As Boolean
+    Public StopProcess As Boolean
+    Public Doctype As String
+    Public DocLang As String
+    Dim ArchiveDwg As String
+    Dim ActualSize As String
+    Dim UOM As String
+    Dim CurrentTime As String
+    Dim CurrentDate As String
+    Dim TheDate As String
+    Dim Tif As Bitmap
+    Dim FivRecord As String
+    Dim FivRev As String
+    Dim FivSh As String
+    Dim FivSize As String
+    Dim FivLang As String
+    Dim FivFileType As String
+    Dim FivMetric As String
+    Dim Busy As Boolean
+    Dim DIRISS = "\\desfp1\comune\plotter\ISS\"
+    Dim IssFileName As String
+    Dim IssFileNameWoExt As String
+    Dim MeseAnno As String = Format(Now, "MMM.yyyy")
+    Private Sub TabNumb_Click(sender As Object, e As EventArgs) Handles TabNumb.Click
+        Call Sub() TabellariRoutine()
+    End Sub
+    Private Sub FSR_Click(sender As Object, e As EventArgs) Handles FSRsw.Click
+        FSR.Show()
+        Call Sub() FSR.StdpathFSR()
+    End Sub
+    Public Sub Form1_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+
+        DirHplotter = My.Settings.DirHplotter
+        ArchivioDisegni = My.Settings.ArchivioDisegni
+        ErrorDir = My.Settings.ErrorDir
+        PariRev = My.Settings.PariRev
+        PlmDir = My.Settings.PlmDir
+        ArchivioStorico = My.Settings.ArchivioStorico
+
+        My.Settings.Save()
+        My.Settings.Reload()
+
+        'DirHplotter = "C:\Users\10150286\Documents\Programmi\Swarchy test\"
+        'ArchivioDisegni = "C:\Users\10150286\Documents\Programmi\Swarchy test\ArchivioDisegni\"
+        'ErrorDir = "C:\Users\10150286\Documents\Programmi\Swarchy test\Rivedere\"
+        'PariRev = "C:\Users\10150286\Documents\Programmi\Swarchy test\PariRev\"
+        'PlmDir = "C:\Users\10150286\Documents\Programmi\Swarchy test\PLM\"
+        'ArchivioStorico = "C:\Users\10150286\Documents\Programmi\Swarchy test\ArchivioStorico\"
+Top:
+        Dim filename As String
+        Dim filenameWOE As String
+        Try
+            For Each FoundFile In My.Computer.FileSystem.GetFiles(DirHplotter)
+
+                filename = IO.Path.GetFileName(FoundFile)
+                filenameWOE = IO.Path.GetFileNameWithoutExtension(FoundFile)
+
+                If FoundFile.Contains(".tif") Then
+                    Hplotter.Items.Add(filenameWOE)
+                End If
+
+                If FoundFile.Contains(".TIF") Then
+                    My.Computer.FileSystem.RenameFile(DirHplotter + filename, filenameWOE + ".tiff")
+                    GoTo Top
+                End If
+
+                If FoundFile.Contains(".tiff") Then
+                    My.Computer.FileSystem.RenameFile(DirHplotter + filename, filenameWOE + ".tif")
+                    GoTo Top
+                End If
+
+            Next
+        Catch
+            MsgBox(ErrorToString)
+        End Try
+
+    End Sub
+    Private Sub VisualizzaFile()
+
+Top:
+
+        Dim filename As String
+        Dim FilenameWOE As String
+        Dim FoundFilesList As String() = System.IO.Directory.GetFiles(DirHplotter)
+        Static FileCount As String = FoundFilesList.Count
+
+        Try
+            If FileCount <> FoundFilesList.Count Then
+                Hplotter.Items.Clear()
+
+                For Each FoundFile In My.Computer.FileSystem.GetFiles(DirHplotter)
+                    filename = IO.Path.GetFileName(FoundFile)
+                    filenameWOE = IO.Path.GetFileNameWithoutExtension(FoundFile)
+
+                    If FoundFile.Contains(".tif") Then
+                        Hplotter.Items.Add(filenameWOE)
+                    End If
+
+                    If FoundFile.Contains(".TIF") Then
+                        My.Computer.FileSystem.RenameFile(DirHplotter + filename, filenameWOE + ".tiff")
+                        GoTo Top
+                    End If
+
+                    If FoundFile.Contains(".tiff") Then
+                        My.Computer.FileSystem.RenameFile(DirHplotter + filename, filenameWOE + ".tif")
+                        GoTo Top
+                    End If
+                Next
+            End If
+            FileCount = FoundFilesList.Count
+        Catch
+        End Try
+
+        Nfile.Text = "N° Drawings: " & Hplotter.Items.Count
+
+    End Sub
+    Private Sub FormatoErrato()
+        Hplotter.Items.Clear()
+        Call Sub() VisualizzaFile()
+        Dim Item As ListViewItem
+        Dim Values() As String = {FileNameH, ErrType}
+        Item = New ListViewItem(Values)
+        Rivedere.Items.Add(Item)
+        LoadingForm.ShowDialog()
+        Call Sub() VisualizzaFile()
+        Call Sub() ErrLogFile()
+
+    End Sub
+    Private Sub FileOk()
+        My.Computer.FileSystem.CopyFile(DirHplotter + FileNameH, PlmDir + FileNameH)
+        My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, DirTifLoc + FileNameH)
+        Hplotter.Items.Clear()
+        Call Sub() VisualizzaFile()
+        Dim ItemOk As ListViewItem
+        Dim ValuesOk() As String = {CurrentDate, CurrentTime, FileNameH, TiflocationForLog & MemoryHy, Process, ArchiveDwg}
+        ItemOk = New ListViewItem(ValuesOk)
+        ProcessLog.Items.Add(ItemOk)
+        LoadingForm.ShowDialog()
+    End Sub
+    Private Sub NewRev()
+        Hplotter.Items.Clear()
+        Call Sub() VisualizzaFile()
+        Dim ItemOk As ListViewItem
+        Dim ValuesOk() As String = {CurrentDate, CurrentTime, FileNameH, TiflocationForLog, Process, ArchiveDwg}
+        ItemOk = New ListViewItem(ValuesOk)
+        ProcessLog.Items.Add(ItemOk)
+        LoadingForm.ShowDialog()
+        Call Sub() VisualizzaFile()
+    End Sub
+    Private Sub Timer1_Tick(sender As Object, e As EventArgs) Handles Timer1.Tick
+        Call Sub() VisualizzaFile()
+        Call Sub() LoadingFormClose()
+        Call Sub() CountTifFiles()
+        Call Sub() ISSloading()
+        Call Sub() FIVloading()
+        TheDate = Today & " " & CurrentTime
+        CurrentDate = Format(Now, "dd.MMM.yyyy")
+        CurrentTime = TimeOfDay
+        ThisDay.Text = Today & " " & CurrentTime
+    End Sub
+
+    Private Sub Sonole17_Tick(sender As Object, e As EventArgs) Handles Sonole17.Tick
+
+        Call Sub() Schedule17()
+
+    End Sub
+
+    Private Sub LoadingFormClose()
+
+        LoadingForm.Close()
+
+    End Sub
+    Private Sub Schedule17()
+
+        If CurrentTime = "17:00:00" Then
+
+            Call Sub() Archivio()
+
+        End If
+
+    End Sub
+    Private Sub Rivedere_FileOpen(sender As Object, e As EventArgs) Handles Rivedere.DoubleClick
+        Try
+            System.Diagnostics.Process.Start(ErrorDir + Rivedere.SelectedItems(0).Text)
+        Catch
+            MsgBox("Il File non Esiste")
+        End Try
+
+    End Sub
+    Private Sub ButtonPaths_Click(sender As Object, e As EventArgs) Handles ButtonPaths.Click
+
+        Dim Password As String
+        Password = InputBox("Per cambiare il percoso e' neccessaria la password di Amministratore!", "ATTENZIONE")
+
+        If Password = ("ADMIN") Then
+
+            PathDirForm.TbDirHplotter.Text = My.Settings.DirHplotter
+            PathDirForm.TbArchivioDisegni.Text = My.Settings.ArchivioDisegni
+            PathDirForm.TbPariRev.Text = My.Settings.PariRev
+            PathDirForm.TbPlmDir.Text = My.Settings.PlmDir
+            PathDirForm.TbArchivioStorico.Text = My.Settings.ArchivioStorico
+            PathDirForm.TbCheckDir.Text = My.Settings.ErrorDir
+
+            PathDirForm.Show()
+        Else
+            MsgBox("Password Errata")
+        End If
+    End Sub
+    Private Sub RenameToolStripMenuItem_Click(sender As Object, e As EventArgs) Handles RenameToolStripMenuItem.Click
+        Try
+            Dim NewFile As String
+
+            NewFile = InputBox("Rename File " & Rivedere.SelectedItems(0).Text & " in", "SWARKY RENAME FILE", Rivedere.SelectedItems(0).Text)
+
+            If NewFile <> ("") Then
+                My.Computer.FileSystem.RenameFile(ErrorDir & Rivedere.SelectedItems(0).Text, NewFile)
+                ErrType = "File Rinominato"
+                Dim Item As ListViewItem
+                Dim Values() As String = {NewFile, ErrType}
+                Item = New ListViewItem(Values)
+                Rivedere.Items.Add(Item)
+                Rivedere.Items.Remove(Rivedere.SelectedItems(0))
+            End If
+        Catch
+            MsgBox(ErrorToString)
+        End Try
+
+    End Sub
+    Private Sub AddToHplotterToolStripMenuItem_Click(sender As Object, e As EventArgs) Handles AddToHplotterToolStripMenuItem.Click
+        Try
+            Hplotter.Items.Clear()
+            My.Computer.FileSystem.MoveFile(ErrorDir + Rivedere.SelectedItems(0).Text, DirHplotter + Rivedere.SelectedItems(0).Text)
+            Rivedere.Items.Remove(Rivedere.SelectedItems(0))
+            Call Sub() VisualizzaFile()
+        Catch
+            MsgBox(ErrorToString)
+        End Try
+    End Sub
+    Private Sub SwarkedFileToolStripMenuItem_Click(sender As Object, e As EventArgs) Handles SwarkedFileToolStripMenuItem.Click
+
+        Try
+            MatchFileName = Rivedere.SelectedItems(0).Text
+            Call Sub() TifLocation()
+            FileNameH = Rivedere.SelectedItems(0).Text
+            DirHplotter = ErrorDir
+            Call Sub() NineMatchArch()
+            MatchFileName = Nothing
+            FileNameH = Nothing
+            DirHplotter = My.Settings.DirHplotter
+            Call Sub() ReportLog()
+        Catch
+            MsgBox(ErrorToString)
+        End Try
+
+    End Sub
+    Private Sub logBackup()
+
+        Dim Logbeckup As String
+        Dim FilesizeHplotter As Double
+        Dim FilesizeBeckup As Double
+        Logbeckup = "C:\Users\10150286\Documents\Programmi\Swarky Log\"
+
+        FilesizeHplotter = FileLen(DirHplotter + "Swarky_" & MeseAnno & ".log") / 1024
+
+        FilesizeBeckup = FileLen(Logbeckup + "Swarky_" & MeseAnno & ".log") / 1024
+
+
+        If My.Computer.FileSystem.FileExists(Logbeckup + "Swarky_" & MeseAnno & ".log") Then
+
+            If FilesizeHplotter < FilesizeBeckup Then
+                MsgBox("Attenzione file log compromesso")
+                'My.Computer.FileSystem.CopyFile(DirHplotter + "Swarky_" & MeseAnno & ".log", Logbeckup + "Swarky_" & TimeOfDay & ".log")
+            Else
+                My.Computer.FileSystem.DeleteFile(Logbeckup + "Swarky_" & MeseAnno & ".log")
+                My.Computer.FileSystem.CopyFile(DirHplotter + "Swarky_" & MeseAnno & ".log", Logbeckup + "Swarky_" & MeseAnno & ".log")
+            End If
+
+        Else
+
+            My.Computer.FileSystem.CopyFile(DirHplotter + "Swarky_" & MeseAnno & ".log", Logbeckup + "Swarky_" & MeseAnno & ".log")
+
+        End If
+
+    End Sub
+    Private Sub LogFile()
+
+        IO.File.AppendAllLines(DirHplotter + "Swarky_" & MeseAnno & ".log",
+                               {CurrentDate & " # " & CurrentTime & " # " _
+                               & FileNameH & Chr(9) & "# " & TiflocationForLog & MemoryHy _
+                               & Chr(9) & Chr(9) & "# " & Process & Chr(9) & "# " & ArchiveDwg})
+
+    End Sub
+    Private Sub ErrLogFile()
+
+        IO.File.AppendAllLines(DirHplotter + "Swarky_" & MeseAnno & ".log",
+                               {CurrentDate & " # " & CurrentTime & " # " _
+                               & FileNameH & Chr(9) & "# ERRORE" & Chr(9) & Chr(9) & "# " _
+                               & ErrType & Chr(9) & "# " & ArchiveDwg})
+
+    End Sub
+    Private Sub ISSLogFile()
+
+        IO.File.AppendAllLines(DIRISS + "SwarkyISS.log",
+                               {CurrentDate & " # " & CurrentTime & " # " & IssFileNameWoExt})
+
+    End Sub
+    Private Sub ReportLog()
+
+        Dim MatchForReport As Match = Regex.Match(MatchFileName, BaseName)
+
+
+        If MatchForReport.Groups(4).Value = "00" Then
+
+            If FolderTifLoc = "costruttivi" Then
+
+                IO.File.AppendAllLines(DirHplotter + "SwarkyReport_" & MeseAnno & ".log", {CurrentDate & " # " _
+                                       & CurrentTime & " # " & MatchFileName & Chr(9) & "# " _
+                                       & TiflocationForLog & MemoryHy & Chr(9) & "# " & Process & Chr(9) & "# " & ErrType})
+
+                ErrType = Nothing
+
+            End If
+
+        End If
+
+    End Sub
+    Private Sub ArchiviaGo_Click(sender As Object, e As EventArgs) Handles ArchiviaButton.Click
+
+        Call Sub() Archivio()
+
+    End Sub
+
+    Public Sub Archivio()
+
+        Busy = True
+
+        Dim TimingPartenza As DateTime = System.DateTime.Now
+        Dim Partenza As DateTime = TimingPartenza.ToString("HH:mm:ss")
+
+
+        Rivedere.Items.Clear()
+        ProcessLog.Items.Clear()
+        StopProcess = False
+Top:
+        Try
+
+            For Each FoundFileH In My.Computer.FileSystem.GetFiles(DirHplotter)
+
+                FileNameH = IO.Path.GetFileName(FoundFileH)
+
+                If FileNameH.Contains("H.tif") Then
+                    FileHy = IO.Path.GetFileNameWithoutExtension(FoundFileH)
+                    FromHyBackNormalBasename = FileHy.ToString.Substring(0, FileHy.Length - 1)
+                    My.Computer.FileSystem.RenameFile(DirHplotter + FileNameH, FromHyBackNormalBasename + ".tif")
+                    MemoryHy = " Hyd"
+                    GoTo Top
+
+                End If
+
+                Dim Mbasename As Match = Regex.Match(FileNameH, BaseName)
+
+                MatchFileName = Mbasename.Value
+
+                If FileNameH.Contains(".tif") Then
+
+                    If Mbasename.Success Then
+
+                        If Mbasename.Groups(1).Value = "A" Or
+                        Mbasename.Groups(1).Value = "B" Or
+                        Mbasename.Groups(1).Value = "C" Or
+                        Mbasename.Groups(1).Value = "D" Or
+                        Mbasename.Groups(1).Value = "E" Then
+
+                            If Mbasename.Groups(2).Value = "M" Or
+                            Mbasename.Groups(2).Value = "K" Or
+                            Mbasename.Groups(2).Value = "F" Or
+                            Mbasename.Groups(2).Value = "T" Or
+                            Mbasename.Groups(2).Value = "E" Or
+                            Mbasename.Groups(2).Value = "S" Or
+                            Mbasename.Groups(2).Value = "N" Or
+                            Mbasename.Groups(2).Value = "P" Then
+
+                                If Mbasename.Groups(6).Value = "M" Or
+                                Mbasename.Groups(6).Value = "I" Or
+                                Mbasename.Groups(6).Value = "D" Or
+                                Mbasename.Groups(6).Value = "N" Then
+
+                                    SubStringNum = Mbasename.Groups(3).Value.Substring(0, 1)
+
+                                    Tif = New Bitmap(FoundFileH)
+                                    ChkTifRot = Tif.Width > Tif.Height = True
+                                    Tif.Dispose()
+
+                                    If ChkTifRot = True Then
+
+                                        ' If SubStringNum = "9" Then
+                                        Call Sub() TifLocation()
+                                        Call Sub() NineMatchArch()
+                                        Call Sub() ReportLog()
+                                        ' Else
+                                        ' Call Sub() TifLocation()
+                                        ' Call Sub() MatchArch()
+                                        ' Call Sub() NineMatchArch()
+                                        ' End If
+                                    Else
+                                        ErrType = "Immagine Girata"
+                                        Call Sub() FormatoErrato()
+                                        My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, ErrorDir + FileNameH)
+                                    End If
+                                    FoundFileH = Nothing
+
+                                Else
+                                    ErrType = "Metrica Errata"
+                                    Call Sub() FormatoErrato()
+                                    My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, ErrorDir + FileNameH)
+                                End If
+                            Else
+                                ErrType = "Location Errata"
+                                Call Sub() FormatoErrato()
+                                My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, ErrorDir + FileNameH)
+                            End If
+
+                        Else
+                            ErrType = "Formato Errato"
+                            Call Sub() FormatoErrato()
+                            My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, ErrorDir + FileNameH)
+                        End If
+
+                    Else
+                        ErrType = "Nome File Errato"
+                        Call Sub() FormatoErrato()
+                        My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, ErrorDir + FileNameH)
+                    End If
+
+                End If
+
+                If StopProcess = True Then
+
+                    Exit Sub
+                End If
+
+                ErrType = Nothing
+
+            Next
+
+        Catch
+            MsgBox(ErrorToString)
+            Exit Sub
+        End Try
+
+        Dim TimingArrivo As DateTime = System.DateTime.Now
+        Dim Arrivo As DateTime = TimingArrivo.ToString("HH:mm:ss")
+        Dim ProcessTime As TimeSpan = Arrivo - Partenza
+        Dim Tempo As ListViewItem
+        Dim TempoOk() As String = {"Process Time:", ProcessTime.ToString}
+        Tempo = New ListViewItem(TempoOk)
+        ProcessLog.Items.Add(Tempo)
+        IO.File.AppendAllLines(DirHplotter + "Swarky_" & MeseAnno & ".log",
+        {"ProcessTime" & " # " & ProcessTime.ToString})
+
+        Call Sub() logBackup()
+
+        Busy = False
+
+    End Sub
+    Public Sub TifLocation()
+
+        Dim Mbasename As Match = Regex.Match(MatchFileName, BaseName)
+
+        SubStringNum = Mbasename.Groups(3).Value.Substring(0, 1)
+
+        If Mbasename.Groups(2).Value = "M" And SubStringNum <> "4" And SubStringNum <> "5" Then
+            FolderTifLoc = "costruttivi"
+            TiflocationForLog = "Costruttivi"
+            SubLocation = "m"
+            Doctype = "DETAIL"
+            DocLang = "Italian"
+        ElseIf Mbasename.Groups(2).Value = "K" Then
+            FolderTifLoc = "bozzetti"
+            TiflocationForLog = "Bozzetti"
+            SubLocation = "k"
+            Doctype = "Customer Drawings"
+            DocLang = "English"
+        ElseIf Mbasename.Groups(2).Value = "F" Then
+            FolderTifLoc = "fornitori"
+            TiflocationForLog = "Fornitori"
+            SubLocation = "f"
+            Doctype = "Vendor Supplied Data"
+            DocLang = "English"
+        ElseIf Mbasename.Groups(2).Value = "T" Then
+            FolderTifLoc = "tenute_meccaniche"
+            TiflocationForLog = "T_meccaniche"
+            SubLocation = "t"
+            Doctype = "Customer Drawings"
+            DocLang = "English"
+        ElseIf Mbasename.Groups(2).Value = "E" Or Mbasename.Groups(2).Value = "S" Then
+            FolderTifLoc = "sezioni"
+            TiflocationForLog = "Sezioni"
+            SubLocation = "s"
+            Doctype = "Customer Drawings"
+            DocLang = "English"
+        ElseIf Mbasename.Groups(2).Value = "N" Then
+            FolderTifLoc = "marcianise"
+            TiflocationForLog = "Marcianise"
+            SubLocation = "n"
+            Doctype = "DETAIL"
+            DocLang = "Italian"
+        ElseIf Mbasename.Groups(2).Value = "P" Then
+            FolderTifLoc = "preventivi"
+            TiflocationForLog = "Preventivi"
+            SubLocation = "p"
+            Doctype = "Customer Drawings"
+            DocLang = "English"
+        ElseIf SubStringNum = "4" Then
+            FolderTifLoc = "pID_ELETTRICI"
+            TiflocationForLog = "Pid_Elettrici"
+            SubLocation = "m"
+            Doctype = "Customer Drawings"
+            DocLang = "Italian"
+        ElseIf SubStringNum = "5" Then
+            FolderTifLoc = "piping"
+            TiflocationForLog = "Piping"
+            SubLocation = "m"
+            Doctype = "Customer Drawings"
+            DocLang = "Italian"
+        End If
+
+        ArchTifLoc = Mbasename.Groups(1).Value & SubLocation
+
+        DirTifLoc = ArchivioDisegni + FolderTifLoc + "\" + ArchTifLoc + "\"
+
+    End Sub
+    Private Sub NineMatchArch()
+
+        Dim Mbasename As Match = Regex.Match(FileNameH, BaseName)
+        Dim MpreNumSearch As String = "D" & Mbasename.Groups(1).Value & Mbasename.Groups(2).Value & Mbasename.Groups(3).Value & "*"
+        Dim FoundFilesList As String() = System.IO.Directory.GetFiles(DirTifLoc, MpreNumSearch)
+        BeckRev = False
+        ArchiveDwg = Nothing
+
+        If My.Computer.FileSystem.FileExists(DirTifLoc + FileNameH) Then
+            'MsgBox("Trovato stesso file quindi bisogna spostare " & Mbasename.Value & " nella cartella pari rev")
+            ErrType = "Pari Revisione"
+            Call Sub() FormatoErrato()
+            My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, PariRev + FileNameH)
+
+        Else
+
+            If FoundFilesList.Count = 0 Then
+                ' MsgBox("non ci sono file con con prefisso e numero uguale quindi il file e' nuovo")
+                Process = "Nuova Revisione"
+                Call Sub() FileOk()
+                Call Sub() LogFile()
+                Call Sub() EDI()
+                ProcessLog.EnsureVisible(ProcessLog.Items.Count - 1)
+                ' Exit Sub
+            Else
+                'MsgBox("trovati file con prefisso e numero uguale quindi si procede al controllo dei fogli " & MarchBasename.Value)
+
+                For Each FileMatch In FoundFilesList
+
+                    Dim MarchBasename As Match = Regex.Match(FileMatch, BaseName)
+                    Dim DwgArch As String = IO.Path.GetFileName(FileMatch)
+                    ArchiveDwg = DwgArch
+
+                    If MarchBasename.Groups(5).Value <> Mbasename.Groups(5).Value Then
+                        ChkSht = "Foglio Diverso"
+                    ElseIf MarchBasename.Groups(5).Value = Mbasename.Groups(5).Value Then
+                        ChkSht = "Stesso Foglio"
+                    End If
+
+                    If MarchBasename.Groups(4).Value < Mbasename.Groups(4).Value Then
+                        ChkRev = "Nuova Revisione"
+                    ElseIf MarchBasename.Groups(4).Value > Mbasename.Groups(4).Value Then
+                        ChkRev = "Revisione Precedente"
+                    ElseIf MarchBasename.Groups(4).Value = Mbasename.Groups(4).Value Then
+                        ChkRev = "Pari Revisione"
+                    End If
+
+                    If MarchBasename.Groups(6).Value <> Mbasename.Groups(6).Value Then
+                        ChkMet = "Metrica Diversa"
+                    ElseIf MarchBasename.Groups(6).Value = Mbasename.Groups(6).Value Then
+                        ChkMet = "Metrica Uguale"
+                    End If
+
+                    If MarchBasename.Success Then
+
+                        If ChkSht = "Stesso Foglio" Then
+
+                            Call Sub() CheckRev()
+                            If BeckRev = True Then
+                                Exit Sub
+                            End If
+
+                        ElseIf ChkSht = "Foglio Diverso" Then
+
+                            Process = "Foglio Diverso"
+                            Call Sub() NewRev()
+                            Call Sub() LogFile()
+
+                        End If
+                    Else
+
+                        'MsgBox(Mbasename.Value & " solo controllo rev. perche' tif corto in archivio " & MarchBasename.Value)
+                        Call Sub() CheckRev()
+                        If BeckRev = True Then
+                            Exit Sub
+                        End If
+
+                    End If
+
+                Next
+
+                My.Computer.FileSystem.CopyFile(DirHplotter + FileNameH, PlmDir + FileNameH)
+                My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, DirTifLoc + FileNameH)
+                Call Sub() EDI()
+                'MsgBox(Mbasename.Value & " Spostato")
+                ProcessLog.EnsureVisible(ProcessLog.Items.Count - 1)
+            End If
+        End If
+
+    End Sub
+    Private Sub CheckRev()
+
+        If ChkRev = "Nuova Revisione" Then
+
+            If ChkMet = "Metrica Diversa" Then
+
+                'MsgBox("E' possibile spostare " & FileNameH & " e in storico " & ArchiveDwg)
+                Process = "ATT.Cambio Metrica"
+                My.Computer.FileSystem.MoveFile(DirTifLoc + ArchiveDwg, ArchivioStorico + ArchiveDwg)
+                Call Sub() NewRev()
+                Call Sub() LogFile()
+            Else
+
+                'MsgBox("E' possibile spostare " & FileNameH & " e in storico " & ArchiveDwg)
+                Process = "Nuova Revisione"
+                My.Computer.FileSystem.MoveFile(DirTifLoc + ArchiveDwg, ArchivioStorico + ArchiveDwg)
+                Call Sub() NewRev()
+                Call Sub() LogFile()
+
+            End If
+
+        ElseIf ChkRev = "Pari Revisione" Then
+
+            If ChkMet = "Metrica Diversa" Then
+                'MsgBox("E' possibile spostare " & FileNameH & "  in archivio disegni, generare avviso metrica diversa " & ArchiveDwg)
+                Process = "Metrica Diversa"
+                Call Sub() NewRev()
+                Call Sub() LogFile()
+            End If
+
+        ElseIf ChkRev = "Revisione Precedente" Then
+
+            'MsgBox(FileNameH & " da spostare in rivedere perche' e' una revisione precendente " & ArchiveDwg)
+            ErrType = "Revisione Precendente"
+            Call Sub() FormatoErrato()
+            My.Computer.FileSystem.MoveFile(DirHplotter + FileNameH, ErrorDir + FileNameH)
+            BeckRev = True
+        End If
+    End Sub
+    Private Sub EDI()
+
+        Dim Mbasename As Match = Regex.Match(MatchFileName, BaseName)
+        Dim MpreNumSearch As String = "D" & Mbasename.Groups(1).Value & Mbasename.Groups(2).Value & Mbasename.Groups(3).Value
+        Dim FileNameWe As String
+
+        FileNameWe = IO.Path.GetFileNameWithoutExtension(MatchFileName)
+
+        If Mbasename.Groups(1).Value = "A" Then
+            ActualSize = "A4"
+        ElseIf Mbasename.Groups(1).Value = "B" Then
+            ActualSize = "A3"
+        ElseIf Mbasename.Groups(1).Value = "C" Then
+            ActualSize = "A2"
+        ElseIf Mbasename.Groups(1).Value = "D" Then
+            ActualSize = "A1"
+        ElseIf Mbasename.Groups(1).Value = "E" Then
+            ActualSize = "A0"
+        End If
+
+        If Mbasename.Groups(6).Value = "N" Then
+            UOM = "(Not applicable)"
+        ElseIf Mbasename.Groups(6).Value = "M" Then
+            UOM = "Metric"
+        ElseIf Mbasename.Groups(6).Value = "I" Then
+            UOM = "Inch"
+        ElseIf Mbasename.Groups(6).Value = "D" Then
+            UOM = "Dual"
+        End If
+
+        If MemoryHy = " Hyd" Then
+            Doctype = "Hydraulic"
+        End If
+
+        If My.Computer.FileSystem.FileExists(PlmDir + FileNameWe + ".DESEDI") Then
+
+            'My.Computer.FileSystem.DeleteFile(PlmDir + FileNameWe + ".DESEDI")
+        Else
+
+            IO.File.AppendAllLines(PlmDir + FileNameWe + ".DESEDI",
+{"[Database]
+ServerName=ORMDB33
+ProjectName=FPD Engineering
+[DatabaseFields]
+DocumentNo=" + MpreNumSearch & vbCrLf &
+"DocumentRev=" + Mbasename.Groups(4).Value & vbCrLf &
+"SheetNumber=" + Mbasename.Groups(5).Value & vbCrLf &
+"Description=
+ActualSize=" + ActualSize & vbCrLf &
+"PumpModel=(UNKNOWN)
+OEM=Flowserve
+PumpSize=
+OrderNumber=
+SerialNumber=
+Document_Type=" + Doctype & vbCrLf &
+"DrawingClass=COMMERCIAL
+DesignCenter=Desio, Italy
+OEMSite=Desio, Italy
+OEMDrawingNumber=
+UOM=" + UOM & vbCrLf &
+"DWGLanguage=" + DocLang & vbCrLf &
+"CurrentRevision=Y
+EnteredBy=10150286
+Notes=
+NonEnglishDesc=
+SupersededBy=
+NumberOfStages=
+[DrawingInfo]
+DocumentNo=" + MpreNumSearch & vbCrLf &
+"SheetNumber=" + Mbasename.Groups(5).Value & vbCrLf &
+"Document_Type=Customer Drawings
+DocumentRev=" + Mbasename.Groups(4).Value & vbCrLf &
+"FileName=" + MatchFileName & vbCrLf &
+"FileType=Tiff
+Currentdate=" + theDate})
+
+            MemoryHy = Nothing
+
+        End If
+
+    End Sub
+    Private Sub GENEDI_Click(sender As Object, e As EventArgs) Handles GENEDI.Click
+
+        Dim Heng As String
+        Dim EDIGENERATION As String
+        Dim EDIwoEXT As String
+
+        Heng = ("\\desfp1\Comune\plotter\Hengelo\")
+
+        For Each FoundFile In My.Computer.FileSystem.GetFiles(Heng)
+            EDIGENERATION = IO.Path.GetFileName(FoundFile)
+            EDIwoEXT = IO.Path.GetFileNameWithoutExtension(FoundFile)
+            If EDIGENERATION.Contains(".DESEDI") Then
+                My.Computer.FileSystem.DeleteFile(Heng + EDIGENERATION)
+            End If
+
+            If FoundFile.Contains(".tif") Or
+                FoundFile.Contains(".pdf") Then
+                FivRecord = InputBox("Fiv record " + EDIGENERATION, "EDI Generation", EDIwoEXT)
+                FivRev = InputBox("Fiv Revision " + EDIGENERATION, "EDI Generation", "0")
+                FivSh = InputBox("Fiv Sheet " + EDIGENERATION, "EDI Generation", "0")
+                FivSize = InputBox("Fiv Size " + EDIGENERATION, "EDI Generation", "A")
+                FivLang = InputBox("Fiv Language " + EDIGENERATION, "EDI Generation", "English")
+                FivFileType = InputBox("Fiv Extention Type " + EDIGENERATION, "EDI Generation", "Tiff")
+                FivMetric = InputBox("Fiv Metric " + EDIGENERATION, "EDI Generation", "Metric")
+                IO.File.AppendAllLines(Heng + EDIwoEXT + ".DESEDI",
+{"[Database]
+ServerName=ORMDB33
+ProjectName=FPD Engineering
+[DatabaseFields]
+DocumentNo=" + FivRecord & vbCrLf &
+"DocumentRev=" + FivRev & vbCrLf &
+"SheetNumber=" + FivSh & vbCrLf &
+"Description=
+ActualSize=" + FivSize & vbCrLf &
+"PumpModel=(UNKNOWN)
+OEM=Flowserve
+PumpSize=
+OrderNumber=
+SerialNumber=
+Document_Type=DETAIL
+DrawingClass=COMMERCIAL
+DesignCenter=Desio, Italy
+OEMSite=Desio, Italy
+OEMDrawingNumber=
+UOM=" + FivMetric & vbCrLf &
+"DWGLanguage=" + FivLang & vbCrLf &
+"CurrentRevision=Y
+EnteredBy=10150286
+Notes=
+NonEnglishDesc=
+SupersededBy=
+NumberOfStages=
+[DrawingInfo]
+DocumentNo=" + FivRecord & vbCrLf &
+"SheetNumber=" + FivSh & vbCrLf &
+"Document_Type=Detail
+DocumentRev=" + FivRev & vbCrLf &
+"FileName=" + EDIGENERATION & vbCrLf &
+"FileType=" + FivFileType & vbCrLf &
+"Currentdate=" + theDate})
+
+            End If
+        Next
+
+    End Sub
+    Private Sub ISSloading()
+        Try
+            For Each FoundFileISS In My.Computer.FileSystem.GetFiles(DIRISS)
+
+                IssFileName = IO.Path.GetFileName(FoundFileISS)
+                IssFileNameWoExt = IO.Path.GetFileNameWithoutExtension(FoundFileISS)
+
+                Dim Missbasename As Match = Regex.Match(IssFileName, ISSbasename)
+
+                If Missbasename.Success Then
+
+                    My.Computer.FileSystem.MoveFile(DIRISS + IssFileName, PlmDir + IssFileName)
+
+                    IO.File.AppendAllLines(PlmDir + IssFileNameWoExt + ".DESEDI",
+{"[Database]
+ServerName=ORMDB33
+ProjectName=FPD Engineering
+[DatabaseFields]
+DocumentNo=" + IssFileNameWoExt.Remove(18, 6) & vbCrLf &
+"DocumentRev=" + Missbasename.Groups(4).Value & vbCrLf &
+"SheetNumber=" + Missbasename.Groups(5).Value & vbCrLf &
+"Description= Impeller Specification Sheet                
+ActualSize=A4 
+PumpModel=(UNKNOWN)
+OEM=Flowserve
+PumpSize=
+OrderNumber=
+SerialNumber=
+Document_Type=DETAIL
+DrawingClass=COMMERCIAL
+DesignCenter=Desio, Italy
+OEMSite=Desio, Italy
+OEMDrawingNumber=
+UOM=Metric
+DWGLanguage=English
+CurrentRevision=Y
+EnteredBy=10150286
+Notes=
+NonEnglishDesc=
+SupersededBy=
+NumberOfStages=
+[DrawingInfo]
+DocumentNo=" + IssFileNameWoExt.Remove(18, 6) & vbCrLf &
+"SheetNumber=" + Missbasename.Groups(5).Value & vbCrLf &
+"Document_Type=Detail
+DocumentRev=" + Missbasename.Groups(5).Value & vbCrLf &
+"FileName=" + IssFileName & vbCrLf &
+"FileType=Pdf
+Currentdate=" + theDate})
+
+                    Call Sub() ISSLogFile()
+
+                End If
+
+            Next
+
+        Catch
+            MsgBox(ErrorToString)
+        End Try
+
+    End Sub
+    Private Sub FIVloading()
+
+        Dim DIRfivloading = "\\desfp1\comune\plotter\FIVloading\"
+        Dim FivFileName As String
+
+        Try
+Top:
+            If Busy = False Then
+                For Each FoundFileFIV In My.Computer.FileSystem.GetFiles(DIRfivloading)
+
+                    FivFileName = IO.Path.GetFileName(FoundFileFIV)
+
+                    If FivFileName.Contains("H.tif") Then
+                        FileHy = IO.Path.GetFileNameWithoutExtension(FoundFileFIV)
+                        FromHyBackNormalBasename = FileHy.ToString.Substring(0, FileHy.Length - 1)
+                        My.Computer.FileSystem.RenameFile(DirHplotter + FileNameH, FromHyBackNormalBasename + ".tif")
+                        MemoryHy = " Hyd"
+                        GoTo Top
+                    End If
+
+                    Dim Mbasename As Match = Regex.Match(FivFileName, BaseName)
+
+                    MatchFileName = Mbasename.Value
+
+                    If Mbasename.Success Then
+
+                        Call Sub() TifLocation()
+                        Call Sub() EDI()
+                        My.Computer.FileSystem.MoveFile(DIRfivloading + MatchFileName, PlmDir + MatchFileName)
+                        Process = "Fiv Loading" & Chr(9)
+                        FileNameH = MatchFileName
+                        Call Sub() LogFile()
+                        Call Sub() logBackup()
+                        Call Sub() ReportLog()
+                        Process = Nothing
+                        FileNameH = Nothing
+                        MatchFileName = Nothing
+
+                    End If
+                Next
+            End If
+        Catch
+            MsgBox(ErrorToString)
+        End Try
+
+    End Sub
+    Private Sub TabellariRoutine()
+
+        Dim Tabellari As String
+        Dim Tabname As String
+        Dim AlternateDocNumb As String
+        Dim LoopNumb As Long
+        Dim TotDocNumb As New StringBuilder
+        Dim CompleteString As String
+        Dim answer As String
+
+        Tabellari = ("\\desfp1\Comune\plotter\Tabellari\")
+
+
+        answer = MsgBox("Vuoi utilizzare un file?", MsgBoxStyle.YesNo, "ATTENZIONE")
+        Try
+            If answer = vbYes Then
+
+                For Each FoundFile In My.Computer.FileSystem.GetFiles(Tabellari)
+                    Tabname = IO.Path.GetFileNameWithoutExtension(FoundFile)
+
+                    If FoundFile.Contains(".tif") Then
+
+                        AlternateDocNumb = InputBox("Drawing Number", "Numbering Generation", Tabname)
+                        LoopNumb = InputBox("Position", "Numbering Generation", "1")
+
+                        If LoopNumb < 10 Then
+                            For n = 1 To LoopNumb
+
+                                TotDocNumb.Append(AlternateDocNumb & "0" & n & ",")
+                            Next
+
+                        Else
+                            For n = 1 To 9
+
+                                TotDocNumb.Append(AlternateDocNumb & "0" & n & ",")
+                            Next
+
+                            For n = 10 To LoopNumb
+                                TotDocNumb.Append(AlternateDocNumb & n & ",")
+                            Next
+
+                        End If
+
+                        CompleteString = TotDocNumb.ToString.Substring(0, TotDocNumb.Length - 1)
+
+                        IO.File.AppendAllLines(Tabellari + Tabname + ".txt", {CompleteString})
+
+                    End If
+                Next
+            Else
+                AlternateDocNumb = InputBox("Drawing Number", "Numbering Generation")
+                LoopNumb = InputBox("Position", "Numbering Generation", "1")
+
+                If LoopNumb < 10 Then
+                    For n = 1 To LoopNumb
+
+                        TotDocNumb.Append(AlternateDocNumb & "0" & n & ",")
+                    Next
+
+                Else
+                    For n = 1 To 9
+
+                        TotDocNumb.Append(AlternateDocNumb & "0" & n & ",")
+                    Next
+
+                    For n = 10 To LoopNumb
+                        TotDocNumb.Append(AlternateDocNumb & n & ",")
+                    Next
+
+                End If
+
+                CompleteString = TotDocNumb.ToString.Substring(0, TotDocNumb.Length - 1)
+
+                IO.File.AppendAllLines(Tabellari + AlternateDocNumb + ".txt", {CompleteString})
+            End If
+
+        Catch
+            MsgBox(ErrorToString)
+        End Try
+    End Sub
+    Private Sub CountTifFiles()
+
+        Dim DIRKALTERROR As New IO.DirectoryInfo("\\kalts5\desio$\Errors\")
+        Dim KaltDIR As New IO.DirectoryInfo("\\kalts5\desio$\")
+        Dim HengDIR As New IO.DirectoryInfo("\\desfp1\Comune\plotter\Hengelo\")
+        Dim TabDIR As New IO.DirectoryInfo("\\desfp1\Comune\plotter\Tabellari\")
+        Dim FSRdIR As New IO.DirectoryInfo("\\desfp1\Comune\plotter\Pari_ Revisione\")
+        Dim CheckDIR As New IO.DirectoryInfo("\\desfp1\Comune\plotter\Rivedere\")
+        Dim NtifKaltErr As Integer
+        Dim NtifFSR As Integer
+        Dim NtifCheck As Integer
+        Dim NtifHeng As Integer
+        Dim NtifTab As Integer
+        Dim NtifKalt As Integer
+
+        NtifKaltErr = DIRKALTERROR.GetFiles("*.err").Length
+        NtifFSR = FSRdIR.GetFiles("*.tif").Length
+        NtifCheck = CheckDIR.GetFiles("*.tif").Length
+        NtifHeng = HengDIR.GetFiles("*.tif").Length
+        NtifTab = TabDIR.GetFiles("*.tif").Length
+        NtifKalt = KaltDIR.GetFiles("*.tif").Length
+
+        KaltError.Text = "N° KALT Error: " & NtifKaltErr
+        CountFSRtif.Text = "N° Same Rev Dwg: " & NtifFSR
+        CountCheckTif.Text = "N° Check Dwg: " & NtifCheck
+        CountHengTif.Text = "N° Heng Dwg: " & NtifHeng
+        CountTabTif.Text = "N° Tab Dwg: " & NtifTab
+        CountKalTif.Text = "N° Kal Dwg: " & NtifKalt
+
+    End Sub
+    Private Sub HplotterOpenFodler(sender As Object, e As EventArgs) Handles HPDIR.Click
+        System.Diagnostics.Process.Start(DirHplotter)
+    End Sub
+
+End Class
