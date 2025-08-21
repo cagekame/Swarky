@@ -153,10 +153,16 @@ def uom_from_letter(ch: str) -> str:
 def check_orientation_ok(tif_path: Path) -> bool:
     try:
         from PIL import Image  # opzionale
+    except ImportError:
+        logging.warning("PIL non installato, impossibile verificare l'orientamento di %s", tif_path)
+        return True
+
+    try:
         with Image.open(tif_path) as im:
             return im.width > im.height
     except Exception:
-        return True
+        logging.exception("Errore durante la verifica dell'orientamento per %s", tif_path)
+        return False
 
 # ---- LOG WRITERS ---------------------------------------------------------------------
 
