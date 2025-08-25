@@ -30,6 +30,14 @@ for font_name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
         pass
 style = ttk.Style(root)
 style.configure(".", font=("Calibri", 11))
+# Imposta lo sfondo e il colore del testo per le treeview
+style.configure(
+    "Treeview",
+    background="navy",
+    foreground="white",
+    fieldbackground="navy",
+)
+style.configure("Treeview.Heading", background="navy", foreground="white")
 root.title("Swarky")
 
 root.columnconfigure(0, weight=1)
@@ -47,7 +55,7 @@ anomaly_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 processed_frame = ttk.LabelFrame(root, text="File processati")
 processed_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
 
-plotter_list = tk.Listbox(plotter_frame)
+plotter_list = tk.Listbox(plotter_frame, bg="navy", fg="white")
 plotter_list.pack(fill="both", expand=True)
 
 anomaly_tree = ttk.Treeview(
