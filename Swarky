@@ -228,6 +228,7 @@ def archive_once(cfg: Config) -> bool:
         if m.group(6).upper() not in "MIDN": log_error(cfg, p.name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); continue
         if not check_orientation_ok(p): log_error(cfg, p.name, "Immagine Girata"); move_to(p, cfg.ERROR_DIR); continue
 
+        new_metric = m.group(6).upper()
         loc = map_location(m, cfg)
         dir_tif_loc = loc["dir_tif_loc"]; tiflog = loc["log_name"]
 
@@ -240,16 +241,20 @@ def archive_once(cfg: Config) -> bool:
         for ex in candidates:
             me = BASE_NAME.search(ex.name)
             if not me: continue
+            ex_metric = me.group(6).upper()
             chk_sht = "Stesso Foglio" if me.group(5)==m.group(5) else "Foglio Diverso"
             if me.group(4) < m.group(4): chk_rev = "Nuova Revisione"
             elif me.group(4) > m.group(4): chk_rev = "Revisione Precedente"
             else: chk_rev = "Pari Revisione"
-            chk_met = "Metrica Uguale" if me.group(6)==m.group(6) else "Metrica Diversa"
+            chk_met = "Metrica Uguale" if ex_metric==new_metric else "Metrica Diversa"
 
             if chk_sht == "Stesso Foglio":
                 if chk_rev == "Nuova Revisione":
-                    move_to(ex, cfg.ARCHIVIO_STORICO)
-                    proc = "ATT.Cambio Metrica" if chk_met=="Metrica Diversa" else "Nuova Revisione"
+                    if new_metric in "DN" or ex_metric == new_metric:
+                        move_to(ex, cfg.ARCHIVIO_STORICO)
+                        proc = "ATT.Cambio Metrica" if chk_met=="Metrica Diversa" else "Nuova Revisione"
+                    else:
+                        proc = "Metrica Diversa"
                     log_swarky(cfg, p.name, tiflog, proc, ex.name, hyd)
                 elif chk_rev == "Pari Revisione":
                     if chk_met == "Metrica Diversa":
