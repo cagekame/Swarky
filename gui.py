@@ -8,6 +8,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
+from datetime import datetime, time as dt_time, timedelta
 
 # Try to enable filesystem watching for instant updates of the plotter list.
 try:  # pragma: no cover - optional dependency
@@ -154,6 +155,22 @@ def _run_once_worker():
     run_once(cfg)
     root.after(0, refresh_all)
 
+
+def schedule_daily_run():
+    """Schedule `_scheduled_run` to execute at the next 17:00."""
+    now = datetime.now()
+    target = datetime.combine(now.date(), dt_time(17, 0))
+    if now >= target:
+        target += timedelta(days=1)
+    delay = int((target - now).total_seconds() * 1000)
+    root.after(delay, _scheduled_run)
+
+
+def _scheduled_run():
+    """Run the task once and reschedule for the next day."""
+    run_once_thread()
+    schedule_daily_run()
+
 def _watch_worker(interval, stop_event):
     while not stop_event.is_set():
         run_once(cfg)
@@ -190,6 +207,7 @@ ttk.Button(controls, text="Avvia watch", command=start_watch).pack(side="left", 
 ttk.Button(controls, text="Ferma watch", command=stop_watch).pack(side="left", padx=5)
 
 refresh_all()
+schedule_daily_run()
 update_clock()
 periodic_plotter_refresh()
 start_plotter_watcher()
