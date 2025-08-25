@@ -180,11 +180,13 @@ def check_orientation_ok(tif_path: Path) -> bool:
 def log_swarky(cfg: Config, file_name: str, loc: str, process: str, archive_dwg: str = "", hyd: bool=False):
     d = datetime.now()
     line = f"{d.strftime('%d.%b.%Y')} # {d.strftime('%H:%M:%S')} # {file_name}\t# {loc}{' Hyd' if hyd else ''}\t\t# {process}\t# {archive_dwg}"
+    print(line)
     write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{d.strftime('%b.%Y')}.log", [line])
 
 def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
     d = datetime.now()
     line = f"{d.strftime('%d.%b.%Y')} # {d.strftime('%H:%M:%S')} # {file_name}\t# ERRORE\t\t# {err}\t# {archive_dwg}"
+    print(line)
     write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{d.strftime('%b.%Y')}.log", [line])
 
 # ---- EDI -----------------------------------------------------------------------------
