@@ -30,7 +30,7 @@ for font_name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
         pass
 style = ttk.Style(root)
 style.configure(".", font=("Calibri", 11))
-root.title("Swarky GUI")
+root.title("Swarky")
 
 root.columnconfigure(0, weight=1)
 root.columnconfigure(1, weight=1)
