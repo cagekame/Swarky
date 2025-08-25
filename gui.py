@@ -2,6 +2,7 @@
 """Interfaccia grafica minimale per Swarky."""
 
 from pathlib import Path
+from itertools import chain
 import threading
 import time
 import tkinter as tk
@@ -52,7 +53,12 @@ ttk.Entry(controls, textvariable=interval_var, width=6).pack(side="left")
 
 def refresh_plotter():
     plotter_list.delete(0, tk.END)
-    for p in sorted(cfg.DIR_HPLOTTER.glob("*")):
+    patterns = ("*.tif", "*.TIF", "*.pdf", "*.PDF")
+    files = sorted(
+        chain.from_iterable(cfg.DIR_HPLOTTER.glob(pat) for pat in patterns),
+        key=lambda p: p.name.lower(),
+    )
+    for p in files:
         if p.is_file():
             plotter_list.insert(tk.END, p.name)
 
