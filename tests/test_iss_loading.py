@@ -6,7 +6,7 @@ import sys
 
 def load_swarky():
     """Load the main Swarky module from the repository root."""
-    module_path = Path(__file__).resolve().parents[1] / "Swarky"
+    module_path = Path(__file__).resolve().parents[1] / "Swarky.py"
     loader = importlib.machinery.SourceFileLoader("swarky", str(module_path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
