@@ -19,3 +19,16 @@ python Swarky --watch 60
 Opzioni disponibili:
 
 - `--watch SECONDS` – Loop di polling in secondi, `0` esegue una sola passata
+
+## Interfaccia grafica
+
+È disponibile una piccola GUI basata su `tkinter` per monitorare l'attività di Swarky.
+Avviala con:
+
+```bash
+python gui.py
+```
+
+La finestra mostra i disegni presenti nella cartella di plotter, le anomalie rilevate e
+lo storico dei file processati, oltre a consentire l'avvio manuale o periodico del
+processo.
