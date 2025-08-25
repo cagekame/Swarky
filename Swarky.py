@@ -187,7 +187,7 @@ def log_swarky(cfg: Config, file_name: str, loc: str, process: str, archive_dwg:
     """
     line = f"{file_name} # {loc}{' Hyd' if hyd else ''} # {process} # {archive_dwg}"
     print(line)
-    logging.info(line, extra={"ui": ("processed", file_name, process)})
+    logging.info(line, extra={"ui": ("processed", file_name, process, archive_dwg)})
 
 def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
     """Log an anomaly for ``file_name``."""

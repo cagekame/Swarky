@@ -59,9 +59,16 @@ anomaly_tree.heading("file", text="File")
 anomaly_tree.heading("errore", text="Errore")
 anomaly_tree.pack(fill="both", expand=True)
 
-processed_tree = ttk.Treeview(processed_frame, columns=("file", "proc"), show="headings")
+processed_tree = ttk.Treeview(
+    processed_frame,
+    columns=("data", "ora", "file", "proc", "conf"),
+    show="headings",
+)
+processed_tree.heading("data", text="Data")
+processed_tree.heading("ora", text="Ora")
 processed_tree.heading("file", text="File")
 processed_tree.heading("proc", text="Processo")
+processed_tree.heading("conf", text="Confronto")
 processed_tree.pack(fill="both", expand=True)
 
 controls = ttk.Frame(root)
@@ -101,13 +108,26 @@ class TreeviewHandler(logging.Handler):
         ui = getattr(record, "ui", None)
         if not ui:
             return
-        kind, file_name, msg = ui
+        kind, file_name, *rest = ui
         ts = datetime.fromtimestamp(record.created)
         if kind == "processed":
+            process = rest[0] if rest else ""
+            compare = rest[1] if len(rest) > 1 else ""
             def _add():
-                self.processed.insert("", "end", values=(file_name, msg))
+                self.processed.insert(
+                    "",
+                    "end",
+                    values=(
+                        ts.strftime('%d.%b.%Y'),
+                        ts.strftime('%H:%M:%S'),
+                        file_name,
+                        process,
+                        compare,
+                    ),
+                )
             self.root.after(0, _add)
         elif kind == "anomaly":
+            msg = rest[0] if rest else ""
             def _add():
                 self.anomaly.insert(
                     "",
