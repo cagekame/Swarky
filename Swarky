@@ -330,7 +330,7 @@ def count_tif_files(cfg: Config) -> dict:
 
 def run_once(cfg: Config):
     archive_once(cfg); iss_loading(cfg); fiv_loading(cfg)
-    print("Counts:", count_tif_files(cfg))
+    logging.debug("Counts: %s", count_tif_files(cfg))
 
 def watch_loop(cfg: Config, interval: int):
     logging.info("Watch ogni %ds...", interval)
