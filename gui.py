@@ -213,7 +213,7 @@ def stop_watch():
         watch_stop_event.set()
     watch_thread = None
 
-ttk.Button(controls, text="Esegui una volta", command=run_once_thread).pack(side="left", padx=5)
+ttk.Button(controls, text="Swarky", command=run_once_thread).pack(side="left", padx=5)
 ttk.Button(controls, text="Avvia watch", command=start_watch).pack(side="left", padx=5)
 ttk.Button(controls, text="Ferma watch", command=stop_watch).pack(side="left", padx=5)
 
