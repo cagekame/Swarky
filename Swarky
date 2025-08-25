@@ -250,7 +250,12 @@ def archive_once(cfg: Config) -> bool:
 
             if chk_sht == "Stesso Foglio":
                 if chk_rev == "Nuova Revisione":
-                    if new_metric in "DN" or ex_metric == new_metric:
+                    archive = False
+                    if new_metric in "DN":
+                        archive = True
+                    elif ex_metric == new_metric:
+                        archive = True
+                    if archive:
                         move_to(ex, cfg.ARCHIVIO_STORICO)
                         proc = "ATT.Cambio Metrica" if chk_met=="Metrica Diversa" else "Nuova Revisione"
                     else:
