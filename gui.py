@@ -9,6 +9,13 @@ import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
 
+# Try to enable filesystem watching for instant updates of the plotter list.
+try:  # pragma: no cover - optional dependency
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+except Exception:  # pragma: no cover - watchdog may not be installed
+    Observer = None  # type: ignore
+
 from Swarky import load_config, run_once, watch_loop, setup_logging, month_tag
 
 cfg = load_config(Path("config.toml"))
@@ -107,6 +114,34 @@ def refresh_all():
     refresh_plotter()
     refresh_logs()
 
+
+def periodic_plotter_refresh():
+    """Aggiorna la lista del plotter ogni secondo."""
+    refresh_plotter()
+    root.after(1000, periodic_plotter_refresh)
+
+
+# Optional watchdog-based watcher for immediate refresh on new files.
+plotter_observer = None
+
+
+def start_plotter_watcher():  # pragma: no cover - optional dependency
+    """Start a watchdog observer to update the plotter list on file creation."""
+    global plotter_observer
+    if Observer is None:
+        return
+
+    class Handler(FileSystemEventHandler):
+        def on_created(self, event):
+            if not getattr(event, "is_directory", False):
+                root.after(0, refresh_plotter)
+
+    observer = Observer()
+    observer.schedule(Handler(), str(cfg.DIR_HPLOTTER), recursive=False)
+    observer.daemon = True
+    observer.start()
+    plotter_observer = observer
+
 def update_clock():
     clock_label.config(text=time.strftime("%d/%m/%Y %H:%M:%S"))
     root.after(1000, update_clock)
@@ -155,6 +190,19 @@ ttk.Button(controls, text="Ferma watch", command=stop_watch).pack(side="left", p
 
 refresh_all()
 update_clock()
+periodic_plotter_refresh()
+start_plotter_watcher()
+
+
+def _on_close():
+    if plotter_observer:
+        plotter_observer.stop()
+        plotter_observer.join()
+    stop_watch()
+    root.destroy()
+
+
+root.protocol("WM_DELETE_WINDOW", _on_close)
 
 if __name__ == "__main__":
     root.mainloop()
