@@ -178,16 +178,22 @@ def check_orientation_ok(tif_path: Path) -> bool:
 # ---- LOG WRITERS ---------------------------------------------------------------------
 
 def log_swarky(cfg: Config, file_name: str, loc: str, process: str, archive_dwg: str = "", hyd: bool=False):
-    d = datetime.now()
-    line = f"{d.strftime('%d.%b.%Y')} # {d.strftime('%H:%M:%S')} # {file_name}\t# {loc}{' Hyd' if hyd else ''}\t\t# {process}\t# {archive_dwg}"
+    """Log a processed file.
+
+    Parameters mirror the previous implementation so callers remain unchanged.
+    Logging is delegated to the standard :mod:`logging` infrastructure; the GUI
+    installs a custom handler that updates the UI and the normal ``FileHandler``
+    takes care of appending to the log file.
+    """
+    line = f"{file_name} # {loc}{' Hyd' if hyd else ''} # {process} # {archive_dwg}"
     print(line)
-    write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{d.strftime('%b.%Y')}.log", [line])
+    logging.info(line, extra={"ui": ("processed", file_name, process)})
 
 def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
-    d = datetime.now()
-    line = f"{d.strftime('%d.%b.%Y')} # {d.strftime('%H:%M:%S')} # {file_name}\t# ERRORE\t\t# {err}\t# {archive_dwg}"
+    """Log an anomaly for ``file_name``."""
+    line = f"{file_name} # {err} # {archive_dwg}"
     print(line)
-    write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{d.strftime('%b.%Y')}.log", [line])
+    logging.error(line, extra={"ui": ("anomaly", file_name, err)})
 
 # ---- EDI -----------------------------------------------------------------------------
 

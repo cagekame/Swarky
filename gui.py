@@ -2,9 +2,9 @@
 """Interfaccia grafica minimale per Swarky."""
 
 from pathlib import Path
-from itertools import chain
 import threading
 import time
+import logging
 import tkinter as tk
 from tkinter import ttk
 import tkinter.font as tkfont
@@ -17,7 +17,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - watchdog may not be installed
     Observer = None  # type: ignore
 
-from Swarky import load_config, run_once, watch_loop, setup_logging, month_tag
+from Swarky import load_config, run_once, setup_logging
 
 cfg = load_config(Path("config.toml"))
 setup_logging(cfg)
@@ -87,34 +87,45 @@ def refresh_plotter():
     for name in sorted(files.values(), key=str.lower):
         plotter_list.insert(tk.END, name)
 
-def parse_log_file():
-    log_path = (cfg.LOG_DIR or cfg.DIR_HPLOTTER) / f"Swarky_{month_tag()}.log"
-    anomalies, processed = [], []
-    if log_path.exists():
-        for line in log_path.read_text(encoding="utf-8").splitlines():
-            parts = [part.strip() for part in line.split("#")]
-            if len(parts) >= 5:
-                data, ora, file_name, flag, msg = parts[:5]
-                if flag == "ERRORE":
-                    anomalies.append((data, ora, file_name, msg))
-                else:
-                    processed.append((file_name, msg))
-    return anomalies, processed
 
-def refresh_logs():
-    anomalies, processed = parse_log_file()
-    for item in anomaly_tree.get_children():
-        anomaly_tree.delete(item)
-    for data, ora, f, err in anomalies:
-        anomaly_tree.insert("", "end", values=(data, ora, f, err))
-    for item in processed_tree.get_children():
-        processed_tree.delete(item)
-    for f, proc in processed:
-        processed_tree.insert("", "end", values=(f, proc))
+class TreeviewHandler(logging.Handler):
+    """Handler that pushes log records to the GUI."""
 
-def refresh_all():
-    refresh_plotter()
-    refresh_logs()
+    def __init__(self, root: tk.Misc, processed: ttk.Treeview, anomaly: ttk.Treeview):
+        super().__init__()
+        self.root = root
+        self.processed = processed
+        self.anomaly = anomaly
+
+    def emit(self, record: logging.LogRecord):
+        ui = getattr(record, "ui", None)
+        if not ui:
+            return
+        kind, file_name, msg = ui
+        ts = datetime.fromtimestamp(record.created)
+        if kind == "processed":
+            def _add():
+                self.processed.insert("", "end", values=(file_name, msg))
+            self.root.after(0, _add)
+        elif kind == "anomaly":
+            def _add():
+                self.anomaly.insert(
+                    "",
+                    "end",
+                    values=(
+                        ts.strftime('%d.%b.%Y'),
+                        ts.strftime('%H:%M:%S'),
+                        file_name,
+                        msg,
+                    ),
+                )
+            self.root.after(0, _add)
+
+
+# Install the GUI logging handler before the file handler so UI updates happen first
+tree_handler = TreeviewHandler(root, processed_tree, anomaly_tree)
+logger = logging.getLogger()
+logger.handlers.insert(0, tree_handler)
 
 
 def periodic_plotter_refresh():
@@ -153,7 +164,7 @@ def run_once_thread():
 
 def _run_once_worker():
     run_once(cfg)
-    root.after(0, refresh_all)
+    root.after(0, refresh_plotter)
 
 
 def schedule_daily_run():
@@ -174,7 +185,7 @@ def _scheduled_run():
 def _watch_worker(interval, stop_event):
     while not stop_event.is_set():
         run_once(cfg)
-        root.after(0, refresh_all)
+        root.after(0, refresh_plotter)
         for _ in range(interval):
             if stop_event.is_set():
                 break
@@ -206,7 +217,7 @@ ttk.Button(controls, text="Esegui una volta", command=run_once_thread).pack(side
 ttk.Button(controls, text="Avvia watch", command=start_watch).pack(side="left", padx=5)
 ttk.Button(controls, text="Ferma watch", command=stop_watch).pack(side="left", padx=5)
 
-refresh_all()
+refresh_plotter()
 schedule_daily_run()
 update_clock()
 periodic_plotter_refresh()
