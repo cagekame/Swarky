@@ -7,6 +7,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk
+import tkinter.font as tkfont
 
 from Swarky import load_config, run_once, watch_loop, setup_logging, month_tag
 
@@ -14,6 +15,13 @@ cfg = load_config(Path("config.toml"))
 setup_logging(cfg)
 
 root = tk.Tk()
+for font_name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
+    try:
+        tkfont.nametofont(font_name).configure(family="Calibri")
+    except tk.TclError:
+        pass
+style = ttk.Style(root)
+style.configure(".", font=("Calibri", 11))
 root.title("Swarky GUI")
 
 root.columnconfigure(0, weight=1)
