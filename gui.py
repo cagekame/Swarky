@@ -33,9 +33,13 @@ processed_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
 plotter_list = tk.Listbox(plotter_frame)
 plotter_list.pack(fill="both", expand=True)
 
-anomaly_tree = ttk.Treeview(anomaly_frame, columns=("file", "msg"), show="headings")
+anomaly_tree = ttk.Treeview(
+    anomaly_frame, columns=("data", "ora", "file", "errore"), show="headings"
+)
+anomaly_tree.heading("data", text="Data")
+anomaly_tree.heading("ora", text="Ora")
 anomaly_tree.heading("file", text="File")
-anomaly_tree.heading("msg", text="Messaggio")
+anomaly_tree.heading("errore", text="Errore")
 anomaly_tree.pack(fill="both", expand=True)
 
 processed_tree = ttk.Treeview(processed_frame, columns=("file", "proc"), show="headings")
@@ -68,12 +72,10 @@ def parse_log_file():
     if log_path.exists():
         for line in log_path.read_text(encoding="utf-8").splitlines():
             parts = [part.strip() for part in line.split("#")]
-            if len(parts) >= 4:
-                file_name = parts[1]
-                flag = parts[2]
-                msg = parts[3]
+            if len(parts) >= 5:
+                data, ora, file_name, flag, msg = parts[:5]
                 if flag == "ERRORE":
-                    anomalies.append((file_name, msg))
+                    anomalies.append((data, ora, file_name, msg))
                 else:
                     processed.append((file_name, msg))
     return anomalies, processed
@@ -82,8 +84,8 @@ def refresh_logs():
     anomalies, processed = parse_log_file()
     for item in anomaly_tree.get_children():
         anomaly_tree.delete(item)
-    for f, msg in anomalies:
-        anomaly_tree.insert("", "end", values=(f, msg))
+    for data, ora, f, err in anomalies:
+        anomaly_tree.insert("", "end", values=(data, ora, f, err))
     for item in processed_tree.get_children():
         processed_tree.delete(item)
     for f, proc in processed:
