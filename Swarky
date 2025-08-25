@@ -210,10 +210,12 @@ def write_edi(cfg: Config, m: re.Match, file_name: str, loc: dict, hyd: bool, ou
 
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
-def archive_once(cfg: Config):
+def archive_once(cfg: Config) -> bool:
     start = time.time()
     normalize_extensions(cfg.DIR_HPLOTTER)
+    did_something = False
     for p in sorted(cfg.DIR_HPLOTTER.glob("*.tif")):
+        did_something = True
         hyd = False
         q = process_h_tif(p)
         if q: p, hyd = q, True
@@ -262,8 +264,10 @@ def archive_once(cfg: Config):
         move_to(p, dir_tif_loc)
         write_edi(cfg, m, p.name, loc, hyd, cfg.PLM_DIR)
 
-    elapsed = time.time() - start
-    write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{datetime.now().strftime('%b.%Y')}.log", [f"ProcessTime # {elapsed:.2f}s"])
+    if did_something:
+        elapsed = time.time() - start
+        write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{datetime.now().strftime('%b.%Y')}.log", [f"ProcessTime # {elapsed:.2f}s"])
+    return did_something
 
 def iss_loading(cfg: Config):
     for p in sorted(cfg.DIR_ISS.glob("*.pdf")):
