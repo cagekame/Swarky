@@ -7,13 +7,13 @@ CLI per l'archiviazione e la generazione di file EDI.
 Esegui una passata singola (archivio + ISS + FIV):
 
 ```bash
-python Swarky
+python Swarky.py
 ```
 
 Esegui in modalità watch con un intervallo in secondi:
 
 ```bash
-python Swarky --watch 60
+python Swarky.py --watch 60
 ```
 
 Opzioni disponibili:

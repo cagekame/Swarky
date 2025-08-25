@@ -9,7 +9,7 @@ import importlib.machinery
 
 
 def load_swarky():
-    module_path = Path(__file__).resolve().parents[1] / "Swarky"
+    module_path = Path(__file__).resolve().parents[1] / "Swarky.py"
     loader = importlib.machinery.SourceFileLoader("swarky", str(module_path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
