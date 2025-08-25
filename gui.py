@@ -17,7 +17,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - watchdog may not be installed
     Observer = None  # type: ignore
 
-from Swarky import load_config, run_once, setup_logging
+from Swarky import load_config, run_once, setup_logging, month_tag
 
 cfg = load_config(Path("config.toml"))
 setup_logging(cfg)
@@ -156,6 +156,53 @@ logger = logging.getLogger()
 logger.handlers.insert(0, tree_handler)
 
 
+def load_log_history():
+    """Populate treeviews with previously logged entries."""
+    log_dir = cfg.LOG_DIR or cfg.DIR_HPLOTTER
+    log_file = log_dir / f"Swarky_{month_tag()}.log"
+    if not log_file.exists():
+        return
+    for line in log_file.read_text(encoding="utf-8").splitlines():
+        parts = line.strip().split(" ", 3)
+        if len(parts) < 4:
+            continue
+        try:
+            ts = datetime.strptime(" ".join(parts[:2]), "%Y-%m-%d %H:%M:%S,%f")
+        except ValueError:
+            continue
+        level = parts[2]
+        msg = parts[3]
+        fields = [f.strip() for f in msg.split(" # ")]
+        if level == "INFO" and len(fields) >= 3:
+            file_name = fields[0]
+            process = fields[2]
+            compare = fields[3] if len(fields) > 3 else ""
+            processed_tree.insert(
+                "",
+                "end",
+                values=(
+                    ts.strftime('%d.%b.%Y'),
+                    ts.strftime('%H:%M:%S'),
+                    file_name,
+                    process,
+                    compare,
+                ),
+            )
+        elif level == "ERROR" and len(fields) >= 2:
+            file_name = fields[0]
+            err = fields[1]
+            anomaly_tree.insert(
+                "",
+                "end",
+                values=(
+                    ts.strftime('%d.%b.%Y'),
+                    ts.strftime('%H:%M:%S'),
+                    file_name,
+                    err,
+                ),
+            )
+
+
 def periodic_plotter_refresh():
     """Aggiorna la lista del plotter ogni secondo."""
     refresh_plotter()
@@ -250,6 +297,7 @@ schedule_daily_run()
 update_clock()
 periodic_plotter_refresh()
 start_plotter_watcher()
+load_log_history()
 
 
 def _on_close():
