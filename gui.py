@@ -77,13 +77,14 @@ ttk.Entry(controls, textvariable=interval_var, width=6).pack(side="left")
 def refresh_plotter():
     plotter_list.delete(0, tk.END)
     patterns = ("*.tif", "*.TIF", "*.pdf", "*.PDF")
-    files = sorted(
-        chain.from_iterable(cfg.DIR_HPLOTTER.glob(pat) for pat in patterns),
-        key=lambda p: p.name.lower(),
-    )
-    for p in files:
-        if p.is_file():
-            plotter_list.insert(tk.END, p.name)
+    files = {
+        p.name.lower(): p.name
+        for pat in patterns
+        for p in cfg.DIR_HPLOTTER.glob(pat)
+        if p.is_file()
+    }
+    for name in sorted(files.values(), key=str.lower):
+        plotter_list.insert(tk.END, name)
 
 def parse_log_file():
     log_path = (cfg.LOG_DIR or cfg.DIR_HPLOTTER) / f"Swarky_{month_tag()}.log"
