@@ -18,5 +18,4 @@ python Swarky --watch 60
 
 Opzioni disponibili:
 
-- `--config PATH` – Percorso file di configurazione TOML
 - `--watch SECONDS` – Loop di polling in secondi, `0` esegue una sola passata
