@@ -237,6 +237,7 @@ def archive_once(cfg: Config) -> bool:
         prefix = f"D{m.group(1)}{m.group(2)}{m.group(3)}"
         candidates = list(dir_tif_loc.glob(f"{prefix}*"))
         beckrev = False
+        new_metric = m.group(6).upper()
         for ex in candidates:
             me = BASE_NAME.search(ex.name)
             if not me: continue
@@ -248,9 +249,12 @@ def archive_once(cfg: Config) -> bool:
 
             if chk_sht == "Stesso Foglio":
                 if chk_rev == "Nuova Revisione":
-                    move_to(ex, cfg.ARCHIVIO_STORICO)
-                    proc = "ATT.Cambio Metrica" if chk_met=="Metrica Diversa" else "Nuova Revisione"
-                    log_swarky(cfg, p.name, tiflog, proc, ex.name, hyd)
+                    if chk_met == "Metrica Uguale" or new_metric in "DN":
+                        move_to(ex, cfg.ARCHIVIO_STORICO)
+                        proc = "ATT.Cambio Metrica" if chk_met=="Metrica Diversa" else "Nuova Revisione"
+                        log_swarky(cfg, p.name, tiflog, proc, ex.name, hyd)
+                    else:
+                        log_swarky(cfg, p.name, tiflog, "Nuova Revisione", ex.name, hyd)
                 elif chk_rev == "Pari Revisione":
                     if chk_met == "Metrica Diversa":
                         log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name, hyd)

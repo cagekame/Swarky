@@ -43,6 +43,11 @@ def log_path(swarky, cfg):
     return cfg.LOG_DIR / f"Swarky_{swarky.month_tag()}.log"
 
 
+def existing_dir(swarky, cfg):
+    m = swarky.BASE_NAME.search("DAM000001R01S01M.tif")
+    return swarky.map_location(m, cfg)["dir_tif_loc"]
+
+
 def test_archive_once_logs_process_time(swarky, cfg, monkeypatch):
     cfg.DIR_HPLOTTER.mkdir()
     (cfg.DIR_HPLOTTER / "DAM123456R01S01A.tif").write_bytes(b"0")
@@ -55,3 +60,45 @@ def test_archive_once_skips_process_time_if_no_files(swarky, cfg):
     cfg.DIR_HPLOTTER.mkdir()
     assert swarky.archive_once(cfg) is False
     assert not log_path(swarky, cfg).exists()
+
+
+def test_new_revision_same_metric_moves_only_matching(swarky, cfg, monkeypatch):
+    monkeypatch.setattr(swarky, "check_orientation_ok", lambda _: True)
+    dir_existing = existing_dir(swarky, cfg)
+    dir_existing.mkdir(parents=True)
+    # existing files with different metrics
+    (dir_existing / "DAM000001R01S01M.tif").write_bytes(b"0")
+    (dir_existing / "DAM000001R01S01I.tif").write_bytes(b"0")
+    # new revision with same metric M
+    cfg.DIR_HPLOTTER.mkdir()
+    (cfg.DIR_HPLOTTER / "DAM000001R02S01M.tif").write_bytes(b"0")
+    swarky.archive_once(cfg)
+    assert sorted(p.name for p in cfg.ARCHIVIO_STORICO.glob("*.tif")) == ["DAM000001R01S01M.tif"]
+    assert sorted(p.name for p in dir_existing.glob("*.tif")) == ["DAM000001R01S01I.tif", "DAM000001R02S01M.tif"]
+
+
+def test_new_revision_different_metric_keeps_existing(swarky, cfg, monkeypatch):
+    monkeypatch.setattr(swarky, "check_orientation_ok", lambda _: True)
+    dir_existing = existing_dir(swarky, cfg)
+    dir_existing.mkdir(parents=True)
+    (dir_existing / "DAM000001R01S01M.tif").write_bytes(b"0")
+    cfg.DIR_HPLOTTER.mkdir()
+    # new revision with metric I
+    (cfg.DIR_HPLOTTER / "DAM000001R02S01I.tif").write_bytes(b"0")
+    swarky.archive_once(cfg)
+    assert list(cfg.ARCHIVIO_STORICO.glob("*.tif")) == []
+    assert sorted(p.name for p in dir_existing.glob("*.tif")) == ["DAM000001R01S01M.tif", "DAM000001R02S01I.tif"]
+
+
+@pytest.mark.parametrize("metric", ["D", "N"])
+def test_new_revision_d_or_n_archives_all(swarky, cfg, monkeypatch, metric):
+    monkeypatch.setattr(swarky, "check_orientation_ok", lambda _: True)
+    dir_existing = existing_dir(swarky, cfg)
+    dir_existing.mkdir(parents=True)
+    (dir_existing / "DAM000001R01S01M.tif").write_bytes(b"0")
+    (dir_existing / "DAM000001R01S01I.tif").write_bytes(b"0")
+    cfg.DIR_HPLOTTER.mkdir()
+    (cfg.DIR_HPLOTTER / f"DAM000001R02S01{metric}.tif").write_bytes(b"0")
+    swarky.archive_once(cfg)
+    assert sorted(p.name for p in cfg.ARCHIVIO_STORICO.glob("*.tif")) == ["DAM000001R01S01I.tif", "DAM000001R01S01M.tif"]
+    assert sorted(p.name for p in dir_existing.glob("*.tif")) == [f"DAM000001R02S01{metric}.tif"]
