@@ -101,7 +101,10 @@ def refresh_plotter():
         for p in cfg.DIR_HPLOTTER.glob(pat)
         if p.is_file()
     }
-    for name in sorted(files.values(), key=str.lower):
+    names = sorted(files.values(), key=str.lower)
+    max_len = max((len(n) for n in names), default=0)
+    plotter_list.config(width=max_len)
+    for name in names:
         plotter_list.insert(tk.END, name)
 
 
