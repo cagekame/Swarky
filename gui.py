@@ -37,9 +37,6 @@ root.columnconfigure(2, weight=1)
 root.columnconfigure(3, weight=0)
 root.rowconfigure(0, weight=1)
 
-clock_label = ttk.Label(root)
-clock_label.grid(row=0, column=3, sticky="ne", padx=5, pady=5)
-
 plotter_frame = ttk.LabelFrame(root, text="Disegni in Plotter")
 plotter_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
@@ -73,6 +70,9 @@ interval_var = tk.StringVar(value="60")
 
 ttk.Label(controls, text="Intervallo (s):").pack(side="left")
 ttk.Entry(controls, textvariable=interval_var, width=6).pack(side="left")
+
+clock_label = ttk.Label(controls, font=("Calibri", 11))
+clock_label.pack(side="right", padx=5)
 
 def refresh_plotter():
     plotter_list.delete(0, tk.END)
