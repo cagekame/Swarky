@@ -29,7 +29,9 @@ for font_name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
     except tk.TclError:
         pass
 style = ttk.Style(root)
+style.theme_use("clam")
 style.configure(".", font=("Calibri", 11))
+style.configure("TLabelframe", bordercolor="navy")
 # Imposta lo sfondo e il colore del testo per le treeview
 style.configure(
     "Treeview",
