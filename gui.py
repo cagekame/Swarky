@@ -37,7 +37,7 @@ style.configure(
     foreground="white",
     fieldbackground="navy",
 )
-style.configure("Treeview.Heading", background="navy", foreground="white")
+style.configure("Treeview.Heading", background="white", foreground="black")
 root.title("Swarky")
 
 root.columnconfigure(0, weight=1)
