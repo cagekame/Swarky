@@ -19,7 +19,11 @@ root.title("Swarky GUI")
 root.columnconfigure(0, weight=1)
 root.columnconfigure(1, weight=1)
 root.columnconfigure(2, weight=1)
+root.columnconfigure(3, weight=0)
 root.rowconfigure(0, weight=1)
+
+clock_label = ttk.Label(root)
+clock_label.grid(row=0, column=3, sticky="ne", padx=5, pady=5)
 
 plotter_frame = ttk.LabelFrame(root, text="Disegni in Plotter")
 plotter_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
@@ -95,6 +99,10 @@ def refresh_all():
     refresh_plotter()
     refresh_logs()
 
+def update_clock():
+    clock_label.config(text=time.strftime("%d/%m/%Y %H:%M:%S"))
+    root.after(1000, update_clock)
+
 def run_once_thread():
     threading.Thread(target=_run_once_worker, daemon=True).start()
 
@@ -138,6 +146,7 @@ ttk.Button(controls, text="Avvia watch", command=start_watch).pack(side="left", 
 ttk.Button(controls, text="Ferma watch", command=stop_watch).pack(side="left", padx=5)
 
 refresh_all()
+update_clock()
 
 if __name__ == "__main__":
     root.mainloop()
