@@ -79,8 +79,8 @@ ISS_BASENAME = re.compile(r"G(\d{4})(\w{3})(\d{7})ISSR(\d{2})S(\d{2})\.pdf$", re
 def month_tag() -> str:
     return datetime.now().strftime("%b.%Y")
 
-def setup_logging(cfg: Config, debug: bool=False):
-    level = logging.DEBUG if debug else cfg.LOG_LEVEL
+def setup_logging(cfg: Config):
+    level = cfg.LOG_LEVEL
     log_dir = cfg.LOG_DIR or cfg.DIR_HPLOTTER
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"Swarky_{month_tag()}.log"
@@ -328,7 +328,6 @@ def parse_args(argv: List[str]):
     ap = argparse.ArgumentParser(description="Swarky - batch archiviazione/EDI")
     ap.add_argument("--config", type=str, default="config.toml", help="Percorso file di configurazione TOML")
     ap.add_argument("--watch", type=int, default=0, help="Loop di polling in secondi, 0=esegue una sola passata")
-    ap.add_argument("--debug", action="store_true", help="Abilita logging DEBUG")
     return ap.parse_args(argv)
 
 def load_config(path: Path) -> Config:
@@ -341,7 +340,7 @@ def main(argv: List[str]):
     args = parse_args(argv)
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path)
-    setup_logging(cfg, debug=args.debug)
+    setup_logging(cfg)
     if args.watch > 0:
         watch_loop(cfg, args.watch)
     else:
