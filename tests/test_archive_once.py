@@ -55,3 +55,31 @@ def test_archive_once_skips_process_time_if_no_files(swarky, cfg):
     cfg.DIR_HPLOTTER.mkdir()
     assert swarky.archive_once(cfg) is False
     assert not log_path(swarky, cfg).exists()
+
+
+def test_archive_once_retains_file_with_different_metric_when_new_metric_not_dn(swarky, cfg, monkeypatch):
+    dir_loc = cfg.ARCHIVIO_DISEGNI / "costruttivi" / "Am"
+    dir_loc.mkdir(parents=True)
+    old = dir_loc / "DAM123456R01S01M.tif"
+    old.write_bytes(b"old")
+    cfg.DIR_HPLOTTER.mkdir()
+    (cfg.DIR_HPLOTTER / "DAM123456R02S01I.tif").write_bytes(b"new")
+    monkeypatch.setattr(swarky, "check_orientation_ok", lambda _: True)
+    swarky.archive_once(cfg)
+    assert old.exists()
+    assert (dir_loc / "DAM123456R02S01I.tif").exists()
+    assert not (cfg.ARCHIVIO_STORICO / old.name).exists()
+
+
+def test_archive_once_archives_file_when_new_metric_d(swarky, cfg, monkeypatch):
+    dir_loc = cfg.ARCHIVIO_DISEGNI / "costruttivi" / "Am"
+    dir_loc.mkdir(parents=True)
+    old = dir_loc / "DAM123456R01S01M.tif"
+    old.write_bytes(b"old")
+    cfg.DIR_HPLOTTER.mkdir()
+    (cfg.DIR_HPLOTTER / "DAM123456R02S01D.tif").write_bytes(b"new")
+    monkeypatch.setattr(swarky, "check_orientation_ok", lambda _: True)
+    swarky.archive_once(cfg)
+    assert not old.exists()
+    assert (cfg.ARCHIVIO_STORICO / old.name).exists()
+    assert (dir_loc / "DAM123456R02S01D.tif").exists()
