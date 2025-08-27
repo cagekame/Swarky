@@ -192,21 +192,37 @@ class SwarkyApp:
         self.plotter_list.bind("<Double-Button-1>", self._open_selected_plotter)
 
         # Anomalie
-        self.anomaly_tree = ttk.Treeview(self.anomaly_frame, columns=("data","ora","file","errore"),
-                                         show="headings", style="Navy.Treeview")
-        for col, head, w in (("data","Data",90),("ora","Ora",70),("file","File",160),("errore","Errore",150)):
-            self.anomaly_tree.heading(col, text=head, anchor="w")
-            self.anomaly_tree.column(col, width=w, anchor="w", stretch=True)
+        self.anomaly_tree = ttk.Treeview(self.anomaly_frame, 
+            columns=("data","ora","file","errore"),
+            show="headings", style="Navy.Treeview")
+            
+        for col, head, w in (
+            ("data","Data",90),
+            ("ora","Ora",70),
+            ("file","File",160),
+            ("errore","Errore",150)
+            ):
+                
+        self.anomaly_tree.heading(col, text=head, anchor="w")
+        self.anomaly_tree.column(col, width=w, anchor="w", stretch=True)
         self.anomaly_tree.pack(fill="both", expand=True)
 
         # Processati
         self.processed_tree = ttk.Treeview(self.processed_frame,
-                           columns=("data","ora","file","proc","dest","conf"),
-                           show="headings", style="Navy.Treeview")
-        for col, head, w in (("data","Data",100),("ora","Ora",80),("file","File",220),
-                             ("proc","Processo",160),("dest","Destinazione",200),("conf","Confronto",160)):
-            self.processed_tree.heading(col, text=head, anchor="w")
-            self.processed_tree.column(col, width=w, anchor="w", stretch=True)
+            columns=("data","ora","file","proc","dest","conf"),
+            show="headings", style="Navy.Treeview")
+            
+        for col, head, w in (
+            ("data","Data",100),
+            ("ora","Ora",80),
+            ("file","File",220),
+            ("proc","Processo",160),
+            ("dest","Destinazione",200),
+            ("conf","Confronto",160)
+            ):
+                
+        self.processed_tree.heading(col, text=head, anchor="w")
+        self.processed_tree.column(col, width=w, anchor="w", stretch=True)
         self.processed_tree.pack(fill="both", expand=True)
 
         # Min sizes (STRETCH attivo come nel tuo codice originale)
