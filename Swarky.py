@@ -1,28 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import sys, re, time, shutil, logging
+import sys, re, time, shutil, logging, json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-
-# ---- TOML loader (Python 3.11+: tomllib; altrimenti prova 'toml') -----------------
-try:
-    import tomllib  # Python 3.11+
-    def load_toml_bytes(b: bytes) -> Dict[str, Any]:
-        return tomllib.loads(b.decode("utf-8"))
-except Exception:
-    try:
-        import toml  # type: ignore
-        def load_toml_bytes(b: bytes) -> Dict[str, Any]:
-            return toml.loads(b.decode("utf-8"))
-    except Exception:
-        tomllib = None
-        def load_toml_bytes(b: bytes) -> Dict[str, Any]:
-            raise RuntimeError(
-                "Impossibile leggere config.toml: serve Python 3.11+ (tomllib) oppure il pacchetto 'toml'."
-            )
 
 # ---- CONFIG DATACLASS ----------------------------------------------------------------
 
@@ -44,7 +27,7 @@ class Config:
     LOG_LEVEL: int = logging.INFO
 
     @staticmethod
-    def from_toml(d: Dict[str, Any]) -> "Config":
+    def from_json(d: Dict[str, Any]) -> "Config":
         p = d.get("paths", {})
         def P(key: str, default: Optional[str]=None) -> Path:
             val = p.get(key, default)
@@ -71,8 +54,7 @@ class Config:
 
 # ---- REGEX ---------------------------------------------------------------------------
 
-# accetta .tif o .pdf
-BASE_NAME = re.compile( r"D(\w)(\w)(\d{6})R(\d{2})S(\d{2})(\w)\.(tif|pdf)$", re.IGNORECASE)
+BASE_NAME = re.compile(r"D(\w)(\w)(\d{6})R(\d{2})S(\d{2})(\w)\.(tif|pdf)$", re.IGNORECASE)
 ISS_BASENAME = re.compile(r"G(\d{4})(\w{3})(\d{7})ISSR(\d{2})S(\d{2})\.pdf$", re.IGNORECASE)
 
 # ---- LOGGING -------------------------------------------------------------------------
@@ -125,7 +107,7 @@ def write_lines(p: Path, lines: List[str]):
     with p.open("a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
-# ---- MAPPATURE E VALIDAZIONI ---------------------------------------------------------
+# ---- MAPPATURE, VALIDAZIONI E LOG WRITERS --------------------------------------------
 
 LOCATION_MAP = {
     ("M", "*"): ("costruttivi", "Costruttivi", "m", "DETAIL", "Italian"),
@@ -139,9 +121,7 @@ LOCATION_MAP = {
     ("*", "4"): ("pID_ELETTRICI", "Pid_Elettrici", "m", "Customer Drawings", "Italian"),
     ("*", "5"): ("piping", "Piping", "m", "Customer Drawings", "Italian"),
 }
-
 DEFAULT_LOCATION = ("unknown", "Unknown", "m", "Customer Drawings", "English")
-
 
 def map_location(m: re.Match, cfg: Config) -> dict:
     first = m.group(3)[0]
@@ -155,7 +135,8 @@ def map_location(m: re.Match, cfg: Config) -> dict:
     folder, log_name, subloc, doctype, lang = loc
     arch_tif_loc = m.group(1).upper() + subloc
     dir_tif_loc = cfg.ARCHIVIO_DISEGNI / folder / arch_tif_loc
-    return dict(folder=folder, log_name=log_name, subloc=subloc, doctype=doctype, lang=lang, arch_tif_loc=arch_tif_loc, dir_tif_loc=dir_tif_loc)
+    return dict(folder=folder, log_name=log_name, subloc=subloc, doctype=doctype, lang=lang,
+                arch_tif_loc=arch_tif_loc, dir_tif_loc=dir_tif_loc)
 
 def size_from_letter(ch: str) -> str:
     return dict(A="A4",B="A3",C="A2",D="A1",E="A0").get(ch.upper(),"A4")
@@ -164,15 +145,13 @@ def uom_from_letter(ch: str) -> str:
     return dict(N="(Not applicable)",M="Metric",I="Inch",D="Dual").get(ch.upper(),"Metric")
 
 def check_orientation_ok(tif_path: Path) -> bool:
-    # Per i PDF non facciamo controlli di orientamento
     if tif_path.suffix.lower() == ".pdf":
         return True
     try:
-        from PIL import Image  # opzionale
+        from PIL import Image
     except ImportError:
-        logging.warning("PIL non installato, impossibile verificare l'orientamento di %s", tif_path)
+        logging.warning("PIL non installato, impossibile verificare orientamento di %s", tif_path)
         return True
-
     try:
         with Image.open(tif_path) as im:
             return im.width > im.height
@@ -180,47 +159,16 @@ def check_orientation_ok(tif_path: Path) -> bool:
         logging.exception("Errore durante la verifica dell'orientamento per %s", tif_path)
         return False
 
-# ---- LOG WRITERS ---------------------------------------------------------------------
-
 def log_swarky(cfg: Config, file_name: str, loc: str, process: str,
                archive_dwg: str = "", hyd: bool=False, dest: str = ""):
-    """Log a processed file.
-
-    'dest' è opzionale e indica la destinazione finale del file (o di un file correlato).
-    La GUI può leggerlo come quinta voce della tupla 'ui'.
-    """
     line = f"{file_name} # {loc}{' Hyd' if hyd else ''} # {process} # {archive_dwg}"
     print(line)
-    # UI tuple: ("processed", file_name, process, archive_dwg, dest)
     logging.info(line, extra={"ui": ("processed", file_name, process, archive_dwg, dest)})
 
 def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
-    """Log an anomaly for ``file_name``."""
     line = f"{file_name} # {err} # {archive_dwg}"
     print(line)
     logging.error(line, extra={"ui": ("anomaly", file_name, err)})
-
-# ---- EDI -----------------------------------------------------------------------------
-
-def write_edi(cfg: Config, m: re.Match, file_name: str, loc: dict, hyd: bool, out_dir: Path):
-    record = f"D{m.group(1)}{m.group(2)}{m.group(3)}"; rev = m.group(4); sheet = m.group(5)
-    size = size_from_letter(m.group(1)); uom = uom_from_letter(m.group(6))
-    doctype = "Hydraulic" if hyd else loc["doctype"]; lang = loc["lang"]
-    edi = out_dir / (Path(file_name).stem + ".DESEDI")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if edi.exists(): return
-    filetype = "Pdf" if Path(file_name).suffix.lower() == ".pdf" else "Tiff"
-    body = [
-        "[Database]","ServerName=ORMDB33","ProjectName=FPD Engineering","[DatabaseFields]",
-        f"DocumentNo={record}",f"DocumentRev={rev}",f"SheetNumber={sheet}","Description=",
-        f"ActualSize={size}","PumpModel=(UNKNOWN)","OEM=Flowserve","PumpSize=","OrderNumber=","SerialNumber=",
-        f"Document_Type={doctype}","DrawingClass=COMMERCIAL","DesignCenter=Desio, Italy","OEMSite=Desio, Italy","OEMDrawingNumber=",
-        f"UOM={uom}",f"DWGLanguage={lang}","CurrentRevision=Y","EnteredBy=10150286","Notes=","NonEnglishDesc=","SupersededBy=","NumberOfStages=",
-        "[DrawingInfo]",f"DocumentNo={record}",f"SheetNumber={sheet}",
-        "Document_Type=Detail" if doctype=="DETAIL" else "Document_Type=Customer Drawings",
-        f"DocumentRev={rev}",f"FileName={file_name}",f"FileType={filetype}",f"Currentdate={now}"
-    ]
-    write_lines(edi, body)
 
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
@@ -228,7 +176,6 @@ def archive_once(cfg: Config) -> bool:
     start = time.time()
     normalize_extensions(cfg.DIR_HPLOTTER)
     did_something = False
-    # includi anche i PDF
     candidates = list(cfg.DIR_HPLOTTER.glob("*.tif")) + list(cfg.DIR_HPLOTTER.glob("*.pdf"))
     for p in sorted(candidates):
         did_something = True
@@ -236,11 +183,16 @@ def archive_once(cfg: Config) -> bool:
         q = process_h_tif(p)
         if q: p, hyd = q, True
         m = BASE_NAME.search(p.name)
-        if not m: log_error(cfg, p.name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); continue
-        if m.group(1).upper() not in "ABCDE": log_error(cfg, p.name, "Formato Errato"); move_to(p, cfg.ERROR_DIR); continue
-        if m.group(2).upper() not in "MKFTESNP": log_error(cfg, p.name, "Location Errata"); move_to(p, cfg.ERROR_DIR); continue
-        if m.group(6).upper() not in "MIDN": log_error(cfg, p.name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); continue
-        if not check_orientation_ok(p): log_error(cfg, p.name, "Immagine Girata"); move_to(p, cfg.ERROR_DIR); continue
+        if not m:
+            log_error(cfg, p.name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); continue
+        if m.group(1).upper() not in "ABCDE":
+            log_error(cfg, p.name, "Formato Errato"); move_to(p, cfg.ERROR_DIR); continue
+        if m.group(2).upper() not in "MKFTESNP":
+            log_error(cfg, p.name, "Location Errata"); move_to(p, cfg.ERROR_DIR); continue
+        if m.group(6).upper() not in "MIDN":
+            log_error(cfg, p.name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); continue
+        if not check_orientation_ok(p):
+            log_error(cfg, p.name, "Immagine Girata"); move_to(p, cfg.ERROR_DIR); continue
 
         new_metric = m.group(6).upper()
         loc = map_location(m, cfg)
@@ -264,25 +216,22 @@ def archive_once(cfg: Config) -> bool:
 
             if chk_sht == "Stesso Foglio":
                 if chk_rev == "Nuova Revisione":
-                    archive = False
-                    if new_metric in "DN":
-                        archive = True
-                    elif ex_metric == new_metric:
-                        archive = True
+                    archive = (new_metric in "DN") or (ex_metric == new_metric)
                     if archive:
                         move_to(ex, cfg.ARCHIVIO_STORICO)
                         proc = "ATT.Cambio Metrica" if chk_met=="Metrica Diversa" else "Nuova Revisione"
                         log_swarky(cfg, p.name, tiflog, proc, ex.name, hyd, dest="Storico ->")
                     else:
-                        proc = "Metrica Diversa"
-                        log_swarky(cfg, p.name, tiflog, proc, ex.name, hyd)
+                        log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name, hyd)
                 elif chk_rev == "Pari Revisione":
                     if chk_met == "Metrica Diversa":
                         log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name, hyd)
                     else:
-                        log_error(cfg, p.name, "Pari Revisione", ex.name); move_to(p, cfg.ERROR_DIR); beckrev=True; break
+                        log_error(cfg, p.name, "Pari Revisione", ex.name)
+                        move_to(p, cfg.ERROR_DIR); beckrev=True; break
                 else:
-                    log_error(cfg, p.name, "Revisione Precendente", ex.name); move_to(p, cfg.ERROR_DIR); beckrev=True; break
+                    log_error(cfg, p.name, "Revisione Precendente", ex.name)
+                    move_to(p, cfg.ERROR_DIR); beckrev=True; break
             else:
                 log_swarky(cfg, p.name, tiflog, "Foglio Diverso", ex.name, hyd)
         if beckrev: continue
@@ -290,12 +239,12 @@ def archive_once(cfg: Config) -> bool:
         copy_to(p, cfg.PLM_DIR)
         move_to(p, dir_tif_loc)
         write_edi(cfg, m, p.name, loc, hyd, cfg.PLM_DIR)
-
         log_swarky(cfg, p.name, tiflog, "Archiviato", "", hyd, dest=tiflog)
 
     if did_something:
         elapsed = time.time() - start
-        write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{datetime.now().strftime('%b.%Y')}.log", [f"ProcessTime # {elapsed:.2f}s"])
+        write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{datetime.now().strftime('%b.%Y')}.log",
+                    [f"ProcessTime # {elapsed:.2f}s"])
     return did_something
 
 def iss_loading(cfg: Config):
@@ -364,18 +313,18 @@ def watch_loop(cfg: Config, interval: int):
 def parse_args(argv: List[str]):
     import argparse
     ap = argparse.ArgumentParser(description="Swarky - batch archiviazione/EDI")
-    ap.add_argument("--watch", type=int, default=0, help="Loop di polling in secondi, 0=esegue una sola passata")
+    ap.add_argument("--watch", type=int, default=0, help="Loop di polling in secondi, 0=una sola passata")
     return ap.parse_args(argv)
 
 def load_config(path: Path) -> Config:
     if not path.exists():
         raise FileNotFoundError(f"Config non trovato: {path}")
-    data = load_toml_bytes(path.read_bytes())
-    return Config.from_toml(data)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return Config.from_json(data)
 
 def main(argv: List[str]):
     args = parse_args(argv)
-    cfg = load_config(Path("config.toml"))
+    cfg = load_config(Path("config.json"))
     setup_logging(cfg)
     if args.watch > 0:
         watch_loop(cfg, args.watch)
