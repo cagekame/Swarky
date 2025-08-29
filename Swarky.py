@@ -25,6 +25,7 @@ class Config:
     DIR_TABELLARI: Path
     LOG_DIR: Optional[Path] = None
     LOG_LEVEL: int = logging.INFO
+    ACCEPT_PDF: bool = True  # flag per accettazione PDF nel Plotter
 
     @staticmethod
     def from_json(d: Dict[str, Any]) -> "Config":
@@ -50,6 +51,7 @@ class Config:
             DIR_TABELLARI=P("tab"),
             LOG_DIR=Path(log_dir) if log_dir else None,
             LOG_LEVEL=logging.INFO,
+            ACCEPT_PDF=bool(d.get("ACCEPT_PDF", True)),
         )
 
 # ---- REGEX ---------------------------------------------------------------------------
@@ -87,14 +89,6 @@ def normalize_extensions(folder: Path):
                 q = p.with_suffix(".tiff"); p.rename(q); q.rename(q.with_suffix(".tif"))
             elif p.suffix.lower() == ".tiff":
                 p.rename(p.with_suffix(".tif"))
-
-def process_h_tif(path: Path) -> Optional[Path]:
-    n = path.name.lower()
-    if n.endswith("h.tif"):
-        newp = path.with_name(path.stem[:-1] + ".tif")
-        path.rename(newp)
-        return newp
-    return None
 
 def copy_to(src: Path, dst_dir: Path):
     dst_dir.mkdir(parents=True, exist_ok=True); shutil.copy2(src, dst_dir / src.name)
@@ -145,6 +139,7 @@ def uom_from_letter(ch: str) -> str:
     return dict(N="(Not applicable)",M="Metric",I="Inch",D="Dual").get(ch.upper(),"Metric")
 
 def check_orientation_ok(tif_path: Path) -> bool:
+    # i PDF li accettiamo/rigettiamo a monte via ACCEPT_PDF; niente controllo orientamento per i PDF
     if tif_path.suffix.lower() == ".pdf":
         return True
     try:
@@ -160,8 +155,8 @@ def check_orientation_ok(tif_path: Path) -> bool:
         return False
 
 def log_swarky(cfg: Config, file_name: str, loc: str, process: str,
-               archive_dwg: str = "", hyd: bool=False, dest: str = ""):
-    line = f"{file_name} # {loc}{' Hyd' if hyd else ''} # {process} # {archive_dwg}"
+               archive_dwg: str = "", dest: str = ""):
+    line = f"{file_name} # {loc} # {process} # {archive_dwg}"
     print(line)
     logging.info(line, extra={"ui": ("processed", file_name, process, archive_dwg, dest)})
 
@@ -170,18 +165,143 @@ def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
     print(line)
     logging.error(line, extra={"ui": ("anomaly", file_name, err)})
 
+# ---- EDI WRITER (UNICO) --------------------------------------------------------------
+
+def _edi_body(
+    *,
+    document_no: str,
+    rev: str,
+    sheet: str,
+    description: str,
+    actual_size: str,
+    uom: str,
+    doctype: str,
+    lang: str,
+    file_name: str,
+    file_type: str,
+    now: Optional[str] = None
+) -> List[str]:
+    """Costruisce il corpo DESEDI in modo centralizzato."""
+    now = now or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    header = [
+        "[Database]",
+        "ServerName=ORMDB33",
+        "ProjectName=FPD Engineering",
+        "[DatabaseFields]",
+        f"DocumentNo={document_no}",
+        f"DocumentRev={rev}",
+        f"SheetNumber={sheet}",
+        f"Description={description}",
+        f"ActualSize={actual_size}",
+        "PumpModel=(UNKNOWN)",
+        "OEM=Flowserve",
+        "PumpSize=",
+        "OrderNumber=",
+        "SerialNumber=",
+        f"Document_Type={doctype}",
+        "DrawingClass=COMMERCIAL",
+        "DesignCenter=Desio, Italy",
+        "OEMSite=Desio, Italy",
+        "OEMDrawingNumber=",
+        f"UOM={uom}",
+        f"DWGLanguage={lang}",
+        "CurrentRevision=Y",
+        "EnteredBy=10150286",
+        "Notes=",
+        "NonEnglishDesc=",
+        "SupersededBy=",
+        "NumberOfStages=",
+        "[DrawingInfo]",
+        f"DocumentNo={document_no}",
+        f"SheetNumber={sheet}",
+        ("Document_Type=Detail" if doctype == "DETAIL" else "Document_Type=Customer Drawings"),
+        f"DocumentRev={rev}",
+        f"FileName={file_name}",
+        f"FileType={file_type}",
+        f"Currentdate={now}",
+    ]
+    return header
+
+def write_edi(
+    cfg: Config,
+    file_name: str,
+    out_dir: Path,
+    *,
+    m: Optional[re.Match] = None,         # STANDARD/FIV
+    iss_match: Optional[re.Match] = None, # ISS
+    loc: Optional[dict] = None
+) -> None:
+    """
+    Genera un file .DESEDI dentro out_dir per 'file_name'.
+    - ISS -> passare 'iss_match'
+    - STANDARD/FIV -> passare 'm' e 'loc'
+    """
+    edi = out_dir / (Path(file_name).stem + ".DESEDI")
+    if edi.exists():
+        return
+
+    # ---- ISS
+    if iss_match is not None:
+        stem = Path(file_name).stem
+        docno  = stem[:18] + stem[24:] if len(stem) >= 24 else stem
+        rev    = iss_match.group(4)
+        sheet  = iss_match.group(5)
+        body = _edi_body(
+            document_no = docno,
+            rev         = rev,
+            sheet       = sheet,
+            description = " Impeller Specification Sheet",
+            actual_size = "A4",
+            uom         = "Metric",
+            doctype     = "DETAIL",
+            lang        = "English",
+            file_name   = file_name,
+            file_type   = "Pdf",
+        )
+        write_lines(edi, body)
+        return
+
+    # ---- STANDARD / FIV
+    if m is None or loc is None:
+        raise ValueError("write_edi: per STANDARD/FIV servono 'm' (BASE_NAME) e 'loc' (map_location)")
+
+    document_no = f"D{m.group(1)}{m.group(2)}{m.group(3)}"
+    rev         = m.group(4)
+    sheet       = m.group(5)
+    file_type   = "Pdf" if Path(file_name).suffix.lower() == ".pdf" else "Tiff"
+
+    body = _edi_body(
+        document_no = document_no,
+        rev         = rev,
+        sheet       = sheet,
+        description = "",  # come versione originale
+        actual_size = size_from_letter(m.group(1)),
+        uom         = uom_from_letter(m.group(6)),
+        doctype     = loc["doctype"],
+        lang        = loc["lang"],
+        file_name   = file_name,
+        file_type   = file_type,
+    )
+    write_lines(edi, body)
+
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
 def archive_once(cfg: Config) -> bool:
     start = time.time()
     normalize_extensions(cfg.DIR_HPLOTTER)
     did_something = False
-    candidates = list(cfg.DIR_HPLOTTER.glob("*.tif")) + list(cfg.DIR_HPLOTTER.glob("*.pdf"))
+
+    patterns = ["*.tif"]
+    if cfg.ACCEPT_PDF:
+        patterns.append("*.pdf")
+
+    candidates: List[Path] = []
+    for pat in patterns:
+        candidates.extend(cfg.DIR_HPLOTTER.glob(pat))
+
     for p in sorted(candidates):
         did_something = True
-        hyd = False
-        q = process_h_tif(p)
-        if q: p, hyd = q, True
+
         m = BASE_NAME.search(p.name)
         if not m:
             log_error(cfg, p.name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); continue
@@ -198,6 +318,7 @@ def archive_once(cfg: Config) -> bool:
         loc = map_location(m, cfg)
         dir_tif_loc = loc["dir_tif_loc"]; tiflog = loc["log_name"]
 
+        # stesso file esatto già presente
         if (dir_tif_loc / p.name).exists():
             log_error(cfg, p.name, "Pari Revisione"); move_to(p, cfg.PARI_REV_DIR); continue
 
@@ -206,40 +327,50 @@ def archive_once(cfg: Config) -> bool:
         beckrev = False
         for ex in existing:
             me = BASE_NAME.search(ex.name)
-            if not me: continue
+            if not me:
+                continue
+
+            # === NUOVO: blocco pari revisione a prescindere da foglio/metrica ===
+            if me.group(4) == m.group(4):  # stessa revisione
+                log_error(cfg, p.name, "Pari Revisione", ex.name)
+                move_to(p, cfg.ERROR_DIR)
+                beckrev = True
+                break
+            # ====================================================================
+
             ex_metric = me.group(6).upper()
-            chk_sht = "Stesso Foglio" if me.group(5)==m.group(5) else "Foglio Diverso"
-            if me.group(4) < m.group(4): chk_rev = "Nuova Revisione"
-            elif me.group(4) > m.group(4): chk_rev = "Revisione Precedente"
-            else: chk_rev = "Pari Revisione"
-            chk_met = "Metrica Uguale" if ex_metric==new_metric else "Metrica Diversa"
+            chk_sht = "Stesso Foglio" if me.group(5) == m.group(5) else "Foglio Diverso"
+            chk_rev = "Nuova Revisione" if me.group(4) < m.group(4) else "Revisione Precendente"
+            chk_met = "Metrica Uguale" if ex_metric == new_metric else "Metrica Diversa"
 
             if chk_sht == "Stesso Foglio":
                 if chk_rev == "Nuova Revisione":
+                    # D/N sostituiscono entrambe le metriche; M/I sostituiscono solo la stessa metrica
                     archive = (new_metric in "DN") or (ex_metric == new_metric)
                     if archive:
                         move_to(ex, cfg.ARCHIVIO_STORICO)
-                        proc = "ATT.Cambio Metrica" if chk_met=="Metrica Diversa" else "Nuova Revisione"
-                        log_swarky(cfg, p.name, tiflog, proc, ex.name, hyd, dest="Storico ->")
+                        proc = "ATT.Cambio Metrica" if chk_met == "Metrica Diversa" else "Nuova Revisione"
+                        log_swarky(cfg, p.name, tiflog, proc, ex.name, dest="Storico ->")
                     else:
-                        log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name, hyd)
-                elif chk_rev == "Pari Revisione":
-                    if chk_met == "Metrica Diversa":
-                        log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name, hyd)
-                    else:
-                        log_error(cfg, p.name, "Pari Revisione", ex.name)
-                        move_to(p, cfg.ERROR_DIR); beckrev=True; break
-                else:
+                        log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name)
+                else:  # Revisione precedente
                     log_error(cfg, p.name, "Revisione Precendente", ex.name)
-                    move_to(p, cfg.ERROR_DIR); beckrev=True; break
+                    move_to(p, cfg.ERROR_DIR); beckrev = True; break
             else:
-                log_swarky(cfg, p.name, tiflog, "Foglio Diverso", ex.name, hyd)
-        if beckrev: continue
+                # Foglio diverso con revisione diversa: solo informativo
+                log_swarky(cfg, p.name, tiflog, "Foglio Diverso", ex.name)
+
+        if beckrev:
+            continue
 
         copy_to(p, cfg.PLM_DIR)
         move_to(p, dir_tif_loc)
-        write_edi(cfg, m, p.name, loc, hyd, cfg.PLM_DIR)
-        log_swarky(cfg, p.name, tiflog, "Archiviato", "", hyd, dest=tiflog)
+        try:
+            write_edi(cfg, p.name, cfg.PLM_DIR, m=m, loc=loc)
+        except Exception as e:
+            logging.exception("Impossibile creare DESEDI per %s: %s", p.name, e)
+
+        log_swarky(cfg, p.name, tiflog, "Archiviato", "", dest=tiflog)
 
     if did_something:
         elapsed = time.time() - start
@@ -252,32 +383,25 @@ def iss_loading(cfg: Config):
         m = ISS_BASENAME.search(p.name)
         if not m: continue
         move_to(p, cfg.PLM_DIR)
-        stem = p.stem
-        docno = stem[:18] + stem[24:] if len(stem)>=24 else stem
+        try:
+            write_edi(cfg, file_name=p.name, out_dir=cfg.PLM_DIR, iss_match=m)
+        except Exception as e:
+            logging.exception("Impossibile creare DESEDI (ISS) per %s: %s", p.name, e)
         now = datetime.now()
-        edi = cfg.PLM_DIR/(stem+".DESEDI")
-        body = [
-            "[Database]","ServerName=ORMDB33","ProjectName=FPD Engineering","[DatabaseFields]",
-            f"DocumentNo={docno}",f"DocumentRev={m.group(4)}",f"SheetNumber={m.group(5)}",
-            "Description= Impeller Specification Sheet","ActualSize=A4","PumpModel=(UNKNOWN)","OEM=Flowserve",
-            "PumpSize=","OrderNumber=","SerialNumber=","Document_Type=DETAIL","DrawingClass=COMMERCIAL",
-            "DesignCenter=Desio, Italy","OEMSite=Desio, Italy","OEMDrawingNumber=","UOM=Metric","DWGLanguage=English",
-            "CurrentRevision=Y","EnteredBy=10150286","Notes=","NonEnglishDesc=","SupersededBy=","NumberOfStages=",
-            "[DrawingInfo]",f"DocumentNo={docno}",f"SheetNumber={m.group(5)}","Document_Type=Detail",
-            f"DocumentRev={m.group(4)}",f"FileName={p.name}","FileType=Pdf",f"Currentdate={now.strftime('%Y-%m-%d %H:%M:%S')}"
-        ]
-        write_lines(edi, body)
+        stem = p.stem
         log = cfg.DIR_ISS/"SwarkyISS.log"
         write_lines(log, [f"{now.strftime('%d.%b.%Y')} # {now.strftime('%H:%M:%S')} # {stem}"])
 
 def fiv_loading(cfg: Config):
     for p in sorted(cfg.DIR_FIV_LOADING.glob("*")):
         if not p.is_file(): continue
-        _ = process_h_tif(p)
         m = BASE_NAME.search(p.name)
         if not m: continue
         loc = map_location(m, cfg)
-        write_edi(cfg, m, p.name, loc, False, cfg.PLM_DIR)
+        try:
+            write_edi(cfg, m=m, file_name=p.name, loc=loc, out_dir=cfg.PLM_DIR)
+        except Exception as e:
+            logging.exception("Impossibile creare DESEDI (FIV) per %s: %s", p.name, e)
         move_to(p, cfg.PLM_DIR)
         log_swarky(cfg, p.name, loc["log_name"], "Fiv Loading", dest="PLM")
 
