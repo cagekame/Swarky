@@ -24,7 +24,7 @@ except Exception:
     Observer = None  # type: ignore
 
 # --- Backend hooks ---
-from Swarky import Config, run_once, setup_logging, month_tag
+from Swarky import Config, run_once, setup_logging
 
 # --- Tema ---
 LIGHT_BG = "#eef3f9"
@@ -103,7 +103,8 @@ class SwarkyApp:
                 "log_dir": None
             },
             "AUTO_TIME": "",
-            "LOG_LEVEL": "INFO"
+            "LOG_LEVEL": "INFO",
+            "ACCEPT_PDF": True
         }
         try:
             self.json_path.write_text(json.dumps(default, indent=2), encoding="utf-8")
@@ -124,6 +125,7 @@ class SwarkyApp:
         def _p(x):
             return Path(x).expanduser() if x else None
 
+        # passa anche ACCEPT_PDF al dataclass Config del backend
         return Config(
             DIR_HPLOTTER      = _p(paths.get("hplotter")),
             ARCHIVIO_DISEGNI  = _p(paths.get("archivio")),
@@ -139,6 +141,7 @@ class SwarkyApp:
             DIR_TABELLARI     = _p(paths.get("tab")),
             LOG_DIR           = _p(paths.get("log_dir")),
             LOG_LEVEL         = logging.INFO if data.get("LOG_LEVEL","INFO")=="INFO" else logging.DEBUG,
+            ACCEPT_PDF        = bool(data.get("ACCEPT_PDF", True)),
         )
 
     def _reload_cfg(self) -> None:
@@ -192,9 +195,12 @@ class SwarkyApp:
         self.plotter_list.bind("<Double-Button-1>", self._open_selected_plotter)
 
         # Anomalie
-        self.anomaly_tree = ttk.Treeview(self.anomaly_frame, 
+        self.anomaly_tree = ttk.Treeview(
+        self.anomaly_frame, 
             columns=("data","ora","file","errore"),
-            show="headings", style="Navy.Treeview")
+            show="headings",
+            style="Navy.Treeview"
+        )
             
         for col, head, w in (
             ("data","Data",90),
@@ -202,30 +208,33 @@ class SwarkyApp:
             ("file","File",160),
             ("errore","Errore",150)
             ):
-                
-        self.anomaly_tree.heading(col, text=head, anchor="w")
-        self.anomaly_tree.column(col, width=w, anchor="w", stretch=True)
+            self.anomaly_tree.heading(col, text=head, anchor="w")
+            self.anomaly_tree.column(col, width=w, anchor="w", stretch=True)
+            
         self.anomaly_tree.pack(fill="both", expand=True)
 
         # Processati
-        self.processed_tree = ttk.Treeview(self.processed_frame,
+        self.processed_tree = ttk.Treeview(
+            self.processed_frame,
             columns=("data","ora","file","proc","dest","conf"),
-            show="headings", style="Navy.Treeview")
+            show="headings",
+            style="Navy.Treeview"
+        )
             
         for col, head, w in (
-            ("data","Data",100),
-            ("ora","Ora",80),
-            ("file","File",220),
+            ("data","Data",90),
+            ("ora","Ora",70),
+            ("file","File",160),
             ("proc","Processo",160),
-            ("dest","Destinazione",200),
+            ("dest","Destinazione",150),
             ("conf","Confronto",160)
             ):
-                
-        self.processed_tree.heading(col, text=head, anchor="w")
-        self.processed_tree.column(col, width=w, anchor="w", stretch=True)
+            self.processed_tree.heading(col, text=head, anchor="w")
+            self.processed_tree.column(col, width=w, anchor="w", stretch=True)
+            
         self.processed_tree.pack(fill="both", expand=True)
 
-        # Min sizes (STRETCH attivo come nel tuo codice originale)
+        # Min sizes
         self.root.update_idletasks()
         min_anom = sum(self.anomaly_tree.column(c,'width') for c in ("data","ora","file","errore")) + 16
         self.root.grid_columnconfigure(1, minsize=min_anom, weight=1)
@@ -266,7 +275,11 @@ class SwarkyApp:
     # ---------------- Plotter ----------------
     def refresh_plotter(self) -> None:
         self.plotter_list.delete(0, tk.END)
-        patterns = ("*.tif","*.TIF","*.pdf","*.PDF")
+        # mostra i PDF solo se abilitato in config
+        if getattr(self.cfg, "ACCEPT_PDF", True):
+            patterns = ("*.tif","*.TIF","*.pdf","*.PDF")
+        else:
+            patterns = ("*.tif","*.TIF")
         try:
             base = self.cfg.DIR_HPLOTTER
             files = {p.name.lower(): p.name for pat in patterns for p in base.glob(pat) if p.is_file()}
@@ -282,32 +295,6 @@ class SwarkyApp:
         p = (self.cfg.DIR_HPLOTTER / self.plotter_list.get(sel[0]))
         if p.exists():
             _open_path(p)
-
-    # ---------------- Log history (opzionale) ----------------
-    def load_log_history(self) -> None:
-        log_dir = self.cfg.LOG_DIR or self.cfg.DIR_HPLOTTER
-        log_file = log_dir / f"Swarky_{month_tag()}.log"
-        if not log_file.exists():
-            return
-        for line in log_file.read_text(encoding="utf-8").splitlines():
-            parts = line.strip().split(" ", 3)
-            if len(parts) < 4:
-                continue
-            try:
-                ts = datetime.strptime(" ".join(parts[:2]), "%Y-%m-%d %H:%M:%S,%f")
-            except ValueError:
-                continue
-            level, msg = parts[2], parts[3]
-            fields = [f.strip() for f in msg.split(" # ")]
-            if level == "INFO" and len(fields) >= 3:
-                file_name, process = fields[0], fields[2] if len(fields) > 2 else ""
-                compare = fields[3] if len(fields) > 3 else ""
-                dest    = fields[4] if len(fields) > 4 else ""
-                self.insert_processed(ts.strftime("%d.%b.%Y"), ts.strftime("%H:%M:%S"),
-                                      file_name, process, dest, compare)
-            elif level == "ERROR" and len(fields) >= 2:
-                file_name, err = fields[0], fields[1]
-                self.insert_anomaly(ts.strftime("%d.%b.%Y"), ts.strftime("%H:%M:%S"), file_name, err)
 
     # ---------------- AUTO_TIME ----------------
     def _read_auto_time_from_file(self) -> Optional[dt_time]:
@@ -505,7 +492,7 @@ class SwarkyApp:
 
 
 class SettingsDialog(tk.Toplevel):
-    """Impostazioni: paths + AUTO_TIME (HH:MM)."""
+    """Impostazioni: paths + AUTO_TIME (HH:MM) + ACCEPT_PDF."""
     PATH_FIELDS = [
         ("hplotter",  "Cartella Plotter"),
         ("archivio",  "Archivio Disegni"),
@@ -547,8 +534,14 @@ class SettingsDialog(tk.Toplevel):
         self.time_var = tk.StringVar(value=self._auto_time or "")
         ttk.Entry(frm, textvariable=self.time_var, width=8).grid(row=r, column=1, sticky="w", pady=8)
 
+        # Checkbox ACCEPT_PDF
+        self.accept_pdf_var = tk.BooleanVar(value=bool(self._accept_pdf))
+        ttk.Checkbutton(frm, text="Accetta PDF nella cartella Plotter", variable=self.accept_pdf_var).grid(
+            row=r+1, column=0, columnspan=2, sticky="w", pady=(0,8)
+        )
+
         btns = ttk.Frame(frm)
-        btns.grid(row=r+1, column=0, columnspan=3, sticky="e", pady=(12,0))
+        btns.grid(row=r+2, column=0, columnspan=3, sticky="e", pady=(12,0))
         ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right", padx=6)
         ttk.Button(btns, text="Salva", command=self._save).pack(side="right")
 
@@ -563,6 +556,7 @@ class SettingsDialog(tk.Toplevel):
         self._paths = data.get("paths", {})
         self._auto_time = data.get("AUTO_TIME", "")
         self._log_level = data.get("LOG_LEVEL", "INFO")
+        self._accept_pdf = data.get("ACCEPT_PDF", True)
 
     def _browse_dir(self, key: str) -> None:
         start = self.vars[key].get().strip() or str(Path.cwd())
@@ -597,7 +591,12 @@ class SettingsDialog(tk.Toplevel):
                 messagebox.showerror("Errore", "Orario non valido. Usa HH:MM (es. 08:30) o lascia vuoto.")
                 return
 
-        data_out = {"paths": new_paths, "AUTO_TIME": auto_time, "LOG_LEVEL": self._log_level}
+        data_out = {
+            "paths": new_paths,
+            "AUTO_TIME": auto_time,
+            "LOG_LEVEL": self._log_level,
+            "ACCEPT_PDF": bool(self.accept_pdf_var.get())
+        }
         try:
             self.app.json_path.write_text(json.dumps(data_out, indent=2), encoding="utf-8")
         except Exception as e:
