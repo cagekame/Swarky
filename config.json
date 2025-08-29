@@ -15,5 +15,6 @@
     "log_dir": null
   },
   "AUTO_TIME": "17:00",
-  "LOG_LEVEL": "INFO"
+  "LOG_LEVEL": "INFO",
+  "ACCEPT_PDF": false
 }
