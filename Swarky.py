@@ -5,7 +5,7 @@ import sys, re, time, shutil, logging, json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 
 # ---- CONFIG DATACLASS ----------------------------------------------------------------
 
@@ -243,6 +243,7 @@ def write_edi(
     # ---- ISS
     if iss_match is not None:
         stem = Path(file_name).stem
+        # docno = prefisso senza 'ISSRxxSyy'
         docno  = stem[:18] + stem[24:] if len(stem) >= 24 else stem
         rev    = iss_match.group(4)
         sheet  = iss_match.group(5)
@@ -286,6 +287,35 @@ def write_edi(
 
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
+def _detect_regime(uoms: List[str]) -> Optional[str]:
+    """Ritorna 'MI', 'D', 'N' oppure None se vuoto/indeterminato."""
+    if not uoms:
+        return None
+    us = {u.upper() for u in uoms}
+    if us.issubset({"M", "I"}):
+        return "MI"
+    if us == {"D"}:
+        return "D"
+    if us == {"N"}:
+        return "N"
+    # Stato anomalo (misto), lo segnaliamo come None per forzare gestione prudente
+    return None
+
+def _all_existing(cfg: Config, dir_tif_loc: Path, prefix: str) -> List[Path]:
+    try:
+        return list(dir_tif_loc.glob(f"{prefix}*"))
+    except Exception:
+        return []
+
+def _group_by_rev(files: List[Path]) -> Dict[str, List[Tuple[Path, re.Match]]]:
+    out: Dict[str, List[Tuple[Path, re.Match]]] = {}
+    for ex in files:
+        me = BASE_NAME.search(ex.name)
+        if not me:
+            continue
+        out.setdefault(me.group(4), []).append((ex, me))
+    return out
+
 def archive_once(cfg: Config) -> bool:
     start = time.time()
     normalize_extensions(cfg.DIR_HPLOTTER)
@@ -314,63 +344,122 @@ def archive_once(cfg: Config) -> bool:
         if not check_orientation_ok(p):
             log_error(cfg, p.name, "Immagine Girata"); move_to(p, cfg.ERROR_DIR); continue
 
+        new_rev = m.group(4)
+        new_sheet = m.group(5)
         new_metric = m.group(6).upper()
+
         loc = map_location(m, cfg)
         dir_tif_loc = loc["dir_tif_loc"]; tiflog = loc["log_name"]
 
-        # stesso file esatto già presente
+        prefix = f"D{m.group(1)}{m.group(2)}{m.group(3)}"
+        existing = _all_existing(cfg, dir_tif_loc, prefix)
+        groups = _group_by_rev(existing)
+        existing_revs = set(groups.keys())
+
+        # ---- PARI REVISIONE (filename identico) ---------------------------------------
         if (dir_tif_loc / p.name).exists():
             log_error(cfg, p.name, "Pari Revisione"); move_to(p, cfg.PARI_REV_DIR); continue
+        # ------------------------------------------------------------------------------
 
-        prefix = f"D{m.group(1)}{m.group(2)}{m.group(3)}"
-        existing = list(dir_tif_loc.glob(f"{prefix}*"))
-        beckrev = False
-        for ex in existing:
-            me = BASE_NAME.search(ex.name)
-            if not me:
-                continue
-
-            # === NUOVO: blocco pari revisione a prescindere da foglio/metrica ===
-            if me.group(4) == m.group(4):  # stessa revisione
-                log_error(cfg, p.name, "Pari Revisione", ex.name)
-                move_to(p, cfg.ERROR_DIR)
-                beckrev = True
-                break
-            # ====================================================================
-
-            ex_metric = me.group(6).upper()
-            chk_sht = "Stesso Foglio" if me.group(5) == m.group(5) else "Foglio Diverso"
-            chk_rev = "Nuova Revisione" if me.group(4) < m.group(4) else "Revisione Precendente"
-            chk_met = "Metrica Uguale" if ex_metric == new_metric else "Metrica Diversa"
-
-            if chk_sht == "Stesso Foglio":
-                if chk_rev == "Nuova Revisione":
-                    # D/N sostituiscono entrambe le metriche; M/I sostituiscono solo la stessa metrica
-                    archive = (new_metric in "DN") or (ex_metric == new_metric)
-                    if archive:
+        # ---- GESTIONE REVISIONI (sempre PRIMA del regime) -----------------------------
+        if existing_revs:
+            # trova la revisione "attiva" più alta tra quelle presenti
+            max_rev = max(existing_revs)
+            if new_rev > max_rev:
+                # nuova revisione: archivia TUTTE le precedenti (tutti fogli/metriche)
+                for rold, filelist in groups.items():
+                    for ex, _ in filelist:
                         move_to(ex, cfg.ARCHIVIO_STORICO)
-                        proc = "ATT.Cambio Metrica" if chk_met == "Metrica Diversa" else "Nuova Revisione"
-                        log_swarky(cfg, p.name, tiflog, proc, ex.name, dest="Storico ->")
-                    else:
-                        log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name)
-                else:  # Revisione precedente
-                    log_error(cfg, p.name, "Revisione Precendente", ex.name)
-                    move_to(p, cfg.ERROR_DIR); beckrev = True; break
+                        log_swarky(cfg, p.name, tiflog, "Rev superata", ex.name, dest="Storico")
+                # continue con R_new come prima occorrenza (regime verrà impostato sotto)
+                existing = []
+                groups = {}
+                existing_revs = set()
+            elif new_rev < max_rev:
+                # revisione precedente: errore
+                # referenzia uno degli esistenti più nuovi
+                ref = groups[max_rev][0][0].name
+                log_error(cfg, p.name, "Revisione Precendente", ref)
+                move_to(p, cfg.ERROR_DIR)
+                continue
             else:
-                # Foglio diverso con revisione diversa: solo informativo
-                log_swarky(cfg, p.name, tiflog, "Foglio Diverso", ex.name)
+                # new_rev == max_rev → stessa revisione: si passa al controllo regime
+                pass
+        # ------------------------------------------------------------------------------
 
-        if beckrev:
+        # ---- CONTROLLO PARI REVISIONE (stessa R+S+UOM) --------------------------------
+        same_rev_same_sheet_same_metric = False
+        ref_eq = ""
+        for ex, me in groups.get(new_rev, []):
+            if me.group(5) == new_sheet and me.group(6).upper() == new_metric:
+                same_rev_same_sheet_same_metric = True
+                ref_eq = ex.name
+                break
+        if same_rev_same_sheet_same_metric:
+            log_error(cfg, p.name, "Pari Revisione", ref_eq)
+            move_to(p, cfg.PARI_REV_DIR)
+            continue
+        # ------------------------------------------------------------------------------
+
+        # ---- GESTIONE REGIME (stessa revisione attiva) --------------------------------
+        # calcola regime corrente per R=new_rev
+        current_uoms = [me.group(6).upper() for _, me in groups.get(new_rev, [])]
+        regime = _detect_regime(current_uoms)  # "MI", "D", "N" oppure None
+
+        def accept_with_logs():
+            # log informativi se presenti file stessa R con foglio diverso o metrica diversa
+            for ex, me in groups.get(new_rev, []):
+                ex_sheet = me.group(5)
+                ex_uom = me.group(6).upper()
+                if ex_sheet != new_sheet:
+                    log_swarky(cfg, p.name, tiflog, "Foglio Diverso", ex.name)
+                elif ex_uom != new_metric:
+                    # questo accade in regime MI sullo stesso foglio
+                    log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name)
+            # procedi con PLM + archivio + EDI
+            copy_to(p, cfg.PLM_DIR)
+            move_to(p, dir_tif_loc)
+            try:
+                write_edi(cfg, p.name, cfg.PLM_DIR, m=m, loc=loc)
+            except Exception as e:
+                logging.exception("Impossibile creare DESEDI per %s: %s", p.name, e)
+            log_swarky(cfg, p.name, tiflog, "Archiviato", "", dest=tiflog)
+
+        if not current_uoms:
+            # prima occorrenza di questa revisione → imposta regime dal nuovo file
+            accept_with_logs()
             continue
 
-        copy_to(p, cfg.PLM_DIR)
-        move_to(p, dir_tif_loc)
-        try:
-            write_edi(cfg, p.name, cfg.PLM_DIR, m=m, loc=loc)
-        except Exception as e:
-            logging.exception("Impossibile creare DESEDI per %s: %s", p.name, e)
+        # abbiamo già file con stessa revisione
+        if regime == "MI":
+            if new_metric in ("M", "I"):
+                # ammesso
+                accept_with_logs()
+            else:
+                # tentativo di cambio regime a parità di revisione → PR
+                log_error(cfg, p.name, "Pari Revisione (Regime incompatibile)")
+                move_to(p, cfg.PARI_REV_DIR)
+            continue
 
-        log_swarky(cfg, p.name, tiflog, "Archiviato", "", dest=tiflog)
+        if regime == "D":
+            if new_metric == "D":
+                accept_with_logs()
+            else:
+                log_error(cfg, p.name, "Pari Revisione (Regime incompatibile)")
+                move_to(p, cfg.PARI_REV_DIR)
+            continue
+
+        if regime == "N":
+            if new_metric == "N":
+                accept_with_logs()
+            else:
+                log_error(cfg, p.name, "Pari Revisione (Regime incompatibile)")
+                move_to(p, cfg.PARI_REV_DIR)
+            continue
+
+        # regime indeterminato (stato anomalo): per prudenza non consentiamo cambio a stessa R
+        log_error(cfg, p.name, "Pari Revisione (Regime indeterminato)")
+        move_to(p, cfg.PARI_REV_DIR)
 
     if did_something:
         elapsed = time.time() - start
