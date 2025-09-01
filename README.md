@@ -84,11 +84,11 @@ Legenda azioni:
 | **D**    | PR (regime non D-only)      | OK**                       | PR (regime non D-only)     |
 | **N**    | PR (regime non N-only)      | PR (regime non N-only)     | OK**                       |
 
-* In regime **MI**:
+\* In regime **MI**:
 - Se in archivio esiste già lo stesso `R+S+UOM` → **PR** (pari revisione)  
 - Se stesso foglio ma metrica diversa (M vs I) → **OK** (coesistono)  
 
-** In regime **D-only / N-only**:
+\** In regime **D-only / N-only**:
 - Se in archivio esiste già lo stesso `R+S+UOM` → **PR** (pari revisione)  
 - Fogli diversi sempre **OK** (restando nello stesso regime)  
 
