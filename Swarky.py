@@ -366,6 +366,7 @@ def write_edi(
 # ---- ENUM UNA VOLTA PER CARTELLA + UPDATE IN-PLACE (stile VB) ----------------------
 import threading
 from collections import defaultdict
+from bisect import bisect_left, insort
 
 # Cache della cartella: dir -> tuple(names)
 _DIR_LIST_CACHE: dict[str, tuple[str, ...]] = {}
@@ -401,6 +402,7 @@ def _ensure_dir_listing(dirp: Path) -> tuple[str, ...]:
                             names.append(de.name)
         except FileNotFoundError:
             names = []
+        names.sort()
         tup = tuple(names)
         with _DIR_CACHE_MUTEX:
             _DIR_LIST_CACHE[key] = tup
@@ -411,13 +413,13 @@ def _dir_cache_remove_name(dirp: Path, name: str) -> None:
     key = _dir_key(dirp)
     with _DIR_CACHE_MUTEX:
         cur = _DIR_LIST_CACHE.get(key)
-        if not cur or name not in cur:
+        if not cur:
+            return
+        i = bisect_left(cur, name)
+        if i >= len(cur) or cur[i] != name:
             return
         lst = list(cur)
-        try:
-            lst.remove(name)
-        except ValueError:
-            pass
+        lst.pop(i)
         _DIR_LIST_CACHE[key] = tuple(lst)
 
 def _dir_cache_add_name(dirp: Path, name: str) -> None:
@@ -430,7 +432,9 @@ def _dir_cache_add_name(dirp: Path, name: str) -> None:
             return
         if name in cur:
             return
-        _DIR_LIST_CACHE[key] = cur + (name,)
+        lst = list(cur)
+        insort(lst, name)
+        _DIR_LIST_CACHE[key] = tuple(lst)
 
 def _docno_from_match(m: re.Match) -> str:
     return f"D{m.group(1)}{m.group(2)}{m.group(3)}"
@@ -443,16 +447,13 @@ def _list_same_doc_same_sheet_from_cache(dirp: Path, m: re.Match, sheet: str) ->
     listing = _ensure_dir_listing(dirp)
     docno = _docno_from_match(m)
     prefix = f"{docno}R"
+    start = bisect_left(listing, prefix)
+    end = bisect_left(listing, prefix + "~")
     out: list[tuple[str,str,str,str]] = []
-    for nm in listing:
-        if not nm.startswith(prefix):
-            continue
+    for nm in listing[start:end]:
         mm = BASE_NAME.fullmatch(nm)
-        if not mm:
-            continue
-        if mm.group(5) != sheet:
-            continue
-        out.append((mm.group(4), nm, mm.group(6).upper(), mm.group(5)))
+        if mm and mm.group(5) == sheet:
+            out.append((mm.group(4), nm, mm.group(6).upper(), mm.group(5)))
     return out
 
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
