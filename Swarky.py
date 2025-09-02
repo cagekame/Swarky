@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import sys, re, time, shutil, logging, json
+import sys, re, time, shutil, logging, json, os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
+from perf import timeit
 
 # ---- CONFIG DATACLASS ----------------------------------------------------------------
 
@@ -57,7 +58,47 @@ class Config:
 # ---- REGEX ---------------------------------------------------------------------------
 
 BASE_NAME = re.compile(r"D(\w)(\w)(\d{6})R(\d{2})S(\d{2})(\w)\.(tif|pdf)$", re.IGNORECASE)
-ISS_BASENAME = re.compile(r"G(\d{4})(\w{3})(\d{7})ISSR(\d{2})S(\d{2})\.pdf$", re.IGNORECASE)
+ISS_BASENAME = re.compile(r"G(\d{4})([A-Za-z0-9]{4})([A-Za-z0-9]{6})ISSR(\d{2})S(\d{2})\.pdf$", re.IGNORECASE)
+
+# ---- LISTA PER FOGlIO (unica query) -------------------------------------------------
+import glob
+from functools import lru_cache
+
+def _docno_from_match(m: re.Match) -> str:
+    return f"D{m.group(1)}{m.group(2)}{m.group(3)}"
+
+@lru_cache(maxsize=16384)
+def _glob_names(dirp_str: str, pattern: str) -> tuple[str, ...]:
+    patt = os.path.join(dirp_str, pattern)
+    return tuple(os.path.basename(p) for p in glob.iglob(patt))
+
+def _clear_glob_cache():
+    _glob_names.cache_clear()
+
+def _parse_prefixed(names: tuple[str, ...]) -> list[tuple[str, str, str, str]]:
+    """-> [(rev, name, metric, sheet)]"""
+    out: list[tuple[str, str, str, str]] = []
+    for nm in names:
+        mm = BASE_NAME.fullmatch(nm)
+        if mm:
+            out.append((mm.group(4), nm, mm.group(6).upper(), mm.group(5)))
+    return out
+
+def _list_same_doc_same_sheet(dirp: Path, m: re.Match, sheet: str) -> list[tuple[str,str,str,str]]:
+    """Unica query SMB: stesso docno + stesso foglio (qualsiasi rev/metrica)."""
+    docno = _docno_from_match(m)
+    names = _glob_names(str(dirp), f"{docno}R??S{sheet}*")
+    return _parse_prefixed(names)
+
+# ---- PROBE (derivati dalla lista unica) ---------------------------------------------
+def _probe_max_rev_same_sheet_from_list(parsed: list[tuple[str,str,str,str]]) -> Optional[str]:
+    if not parsed:
+        return None
+    mx = None
+    for r, _, _, _ in parsed:
+        if (mx is None) or (r > mx):
+            mx = r
+    return mx
 
 # ---- LOGGING -------------------------------------------------------------------------
 
@@ -74,7 +115,6 @@ def setup_logging(cfg: Config):
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
-            logging.StreamHandler(sys.stdout),
             logging.FileHandler(log_file, encoding="utf-8")
         ]
     )
@@ -82,19 +122,20 @@ def setup_logging(cfg: Config):
 
 # ---- FS UTILS ------------------------------------------------------------------------
 
-def normalize_extensions(folder: Path):
-    for p in folder.glob("*"):
-        if p.is_file():
-            if p.suffix == ".TIF":
-                q = p.with_suffix(".tiff"); p.rename(q); q.rename(q.with_suffix(".tif"))
-            elif p.suffix.lower() == ".tiff":
-                p.rename(p.with_suffix(".tif"))
+# hardlink se possibile, fallback a copy2
+def _fast_copy_or_link(src: Path, dst: Path):
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
 
 def copy_to(src: Path, dst_dir: Path):
-    dst_dir.mkdir(parents=True, exist_ok=True); shutil.copy2(src, dst_dir / src.name)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    _fast_copy_or_link(src, dst_dir / src.name)
 
 def move_to(src: Path, dst_dir: Path):
-    dst_dir.mkdir(parents=True, exist_ok=True); shutil.move(str(src), str(dst_dir / src.name))
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst_dir / src.name))
 
 def write_lines(p: Path, lines: List[str]):
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -138,31 +179,95 @@ def size_from_letter(ch: str) -> str:
 def uom_from_letter(ch: str) -> str:
     return dict(N="(Not applicable)",M="Metric",I="Inch",D="Dual").get(ch.upper(),"Metric")
 
+# ---- ORIENTAMENTO TIFF: parser header-only -------------------------------
+
+_ORIENT_CACHE: dict[tuple[str, float], bool] = {}
+
+def clear_orientation_cache() -> None:
+    _ORIENT_CACHE.clear()
+
+def _tiff_read_size_vfast(path: Path) -> Optional[Tuple[int,int]]:
+    """Legge solo header/IFD per (width,height) Supporta II/MM, SHORT/LONG."""
+    import struct
+    try:
+        with open(path, 'rb') as f:
+            hdr = f.read(8)
+            if len(hdr) < 8:
+                return None
+            endian = hdr[:2]
+            if endian == b'II':
+                u16 = lambda b: struct.unpack('<H', b)[0]
+                u32 = lambda b: struct.unpack('<I', b)[0]
+            elif endian == b'MM':
+                u16 = lambda b: struct.unpack('>H', b)[0]
+                u32 = lambda b: struct.unpack('>I', b)[0]
+            else:
+                return None
+            if u16(hdr[2:4]) != 42:
+                return None
+            ifd_off = u32(hdr[4:8])
+            f.seek(ifd_off)
+            nbytes = f.read(2)
+            if len(nbytes) < 2:
+                return None
+            n = u16(nbytes)
+            TAG_W, TAG_H = 256, 257
+            TYPE_SIZES = {1:1,2:1,3:2,4:4,5:8,7:1,9:4,10:8}
+            w = h = None
+            for _ in range(n):
+                ent = f.read(12)
+                if len(ent) < 12:
+                    break
+                tag = u16(ent[0:2]); typ = u16(ent[2:4]); cnt = u32(ent[4:8]); val = ent[8:12]
+                unit = TYPE_SIZES.get(typ)
+                if not unit:
+                    continue
+                datasz = unit * cnt
+                if datasz <= 4:
+                    if typ == 3: v = u16(val[0:2])
+                    elif typ == 4: v = u32(val)
+                    else: continue
+                else:
+                    off = u32(val); cur = f.tell()
+                    f.seek(off); raw = f.read(unit); f.seek(cur)
+                    if typ == 3: v = u16(raw)
+                    elif typ == 4: v = u32(raw)
+                    else: continue
+                if tag == TAG_W: w = v
+                elif tag == TAG_H: h = v
+                if w is not None and h is not None:
+                    return (w, h)
+    except Exception:
+        return None
+    return None
+
 def check_orientation_ok(tif_path: Path) -> bool:
-    # i PDF li accettiamo/rigettiamo a monte via ACCEPT_PDF; niente controllo orientamento per i PDF
+    """True se (width > height) o se è un PDF."""
     if tif_path.suffix.lower() == ".pdf":
         return True
     try:
-        from PIL import Image
-    except ImportError:
-        logging.warning("PIL non installato, impossibile verificare orientamento di %s", tif_path)
-        return True
-    try:
-        with Image.open(tif_path) as im:
-            return im.width > im.height
+        key = (str(tif_path), tif_path.stat().st_mtime)
+        if key in _ORIENT_CACHE:
+            return _ORIENT_CACHE[key]
     except Exception:
-        logging.exception("Errore durante la verifica dell'orientamento per %s", tif_path)
-        return False
+        key = None
+    wh = _tiff_read_size_vfast(tif_path)
+    if wh is None:
+        res = True
+    else:
+        w, h = wh
+        res = (w > h)
+    if key:
+        _ORIENT_CACHE[key] = res
+    return res
 
 def log_swarky(cfg: Config, file_name: str, loc: str, process: str,
                archive_dwg: str = "", dest: str = ""):
     line = f"{file_name} # {loc} # {process} # {archive_dwg}"
-    print(line)
     logging.info(line, extra={"ui": ("processed", file_name, process, archive_dwg, dest)})
 
 def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
     line = f"{file_name} # {err} # {archive_dwg}"
-    print(line)
     logging.error(line, extra={"ui": ("anomaly", file_name, err)})
 
 # ---- EDI WRITER (UNICO) --------------------------------------------------------------
@@ -181,7 +286,6 @@ def _edi_body(
     file_type: str,
     now: Optional[str] = None
 ) -> List[str]:
-    """Costruisce il corpo DESEDI in modo centralizzato."""
     now = now or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = [
         "[Database]",
@@ -231,268 +335,280 @@ def write_edi(
     iss_match: Optional[re.Match] = None, # ISS
     loc: Optional[dict] = None
 ) -> None:
-    """
-    Genera un file .DESEDI dentro out_dir per 'file_name'.
-    - ISS -> passare 'iss_match'
-    - STANDARD/FIV -> passare 'm' e 'loc'
-    """
     edi = out_dir / (Path(file_name).stem + ".DESEDI")
     if edi.exists():
         return
-
-    # ---- ISS
     if iss_match is not None:
-        stem = Path(file_name).stem
-        # docno = prefisso senza 'ISSRxxSyy'
-        docno  = stem[:18] + stem[24:] if len(stem) >= 24 else stem
-        rev    = iss_match.group(4)
-        sheet  = iss_match.group(5)
+        g1 = iss_match.group(1); g2 = iss_match.group(2); g3 = iss_match.group(3)
+        rev = iss_match.group(4); sheet = iss_match.group(5)
+        docno = f"G{g1}{g2}{g3}"
         body = _edi_body(
-            document_no = docno,
-            rev         = rev,
-            sheet       = sheet,
-            description = " Impeller Specification Sheet",
-            actual_size = "A4",
-            uom         = "Metric",
-            doctype     = "DETAIL",
-            lang        = "English",
-            file_name   = file_name,
-            file_type   = "Pdf",
+            document_no=docno, rev=rev, sheet=sheet,
+            description=" Impeller Specification Sheet",
+            actual_size="A4", uom="Metric", doctype="DETAIL", lang="English",
+            file_name=file_name, file_type="Pdf",
         )
-        write_lines(edi, body)
+        write_lines(out_dir / (Path(file_name).stem + ".DESEDI"), body)
         return
-
-    # ---- STANDARD / FIV
     if m is None or loc is None:
         raise ValueError("write_edi: per STANDARD/FIV servono 'm' (BASE_NAME) e 'loc' (map_location)")
-
     document_no = f"D{m.group(1)}{m.group(2)}{m.group(3)}"
-    rev         = m.group(4)
-    sheet       = m.group(5)
-    file_type   = "Pdf" if Path(file_name).suffix.lower() == ".pdf" else "Tiff"
-
+    rev = m.group(4); sheet = m.group(5)
+    file_type = "Pdf" if Path(file_name).suffix.lower() == ".pdf" else "Tiff"
     body = _edi_body(
-        document_no = document_no,
-        rev         = rev,
-        sheet       = sheet,
-        description = "",  # come versione originale
-        actual_size = size_from_letter(m.group(1)),
-        uom         = uom_from_letter(m.group(6)),
-        doctype     = loc["doctype"],
-        lang        = loc["lang"],
-        file_name   = file_name,
-        file_type   = file_type,
+        document_no=document_no, rev=rev, sheet=sheet, description="",
+        actual_size=size_from_letter(m.group(1)), uom=uom_from_letter(m.group(6)),
+        doctype=loc["doctype"], lang=loc["lang"],
+        file_name=file_name, file_type=file_type,
     )
     write_lines(edi, body)
 
+# ---- CACHE THREAD-SAFE per lista "stesso docno+sheet" -------------------------------
+import threading
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# cache: (dir_str, docno, sheet) -> list parsed [(rev, name, metric, sheet)]
+_SAME_SHEET_CACHE: dict[tuple[str, str, str], list[tuple[str,str,str,str]]] = {}
+_SAME_SHEET_LOCKS: dict[tuple[str, str], threading.Lock] = defaultdict(threading.Lock)  # (dir_str, docno)
+_CACHE_MUTEX = threading.Lock()
+
+def _docno_from_match(m: re.Match) -> str:
+    return f"D{m.group(1)}{m.group(2)}{m.group(3)}"
+
+def _cache_key(dirp: Path, m: re.Match, sheet: str) -> tuple[str, str, str]:
+    return (str(dirp), _docno_from_match(m), sheet)
+
+def _invalidate_same_sheet(dirp: Path, m: re.Match, sheet: str):
+    key = _cache_key(dirp, m, sheet)
+    with _CACHE_MUTEX:
+        _SAME_SHEET_CACHE.pop(key, None)
+
+def _get_same_sheet(dirp: Path, m: re.Match, sheet: str) -> list[tuple[str,str,str,str]]:
+    """
+    Restituisce la lista parsed per (dir, docno, sheet) con cache condivisa.
+    Non invalida automaticamente (lo facciamo quando spostiamo file).
+    """
+    key = _cache_key(dirp, m, sheet)
+    with _CACHE_MUTEX:
+        cached = _SAME_SHEET_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    # MISS: esegui la glob e metti in cache
+    names = _glob_names(key[0], f"{key[1]}R??S{key[2]}*")
+    parsed = _parse_prefixed(names)
+    with _CACHE_MUTEX:
+        _SAME_SHEET_CACHE[key] = parsed
+    return parsed
+
+def _doc_lock(dirp: Path, m: re.Match) -> threading.Lock:
+    # lock per operazioni che modificano FS relative a un docno (qualsiasi sheet)
+    return _SAME_SHEET_LOCKS[(str(dirp), _docno_from_match(m))]
+
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
-def _detect_regime(uoms: List[str]) -> Optional[str]:
-    """Ritorna 'MI', 'D', 'N' oppure None se vuoto/indeterminato."""
-    if not uoms:
-        return None
-    us = {u.upper() for u in uoms}
-    if us.issubset({"M", "I"}):
-        return "MI"
-    if us == {"D"}:
-        return "D"
-    if us == {"N"}:
-        return "N"
-    # Stato anomalo (misto), lo segnaliamo come None per forzare gestione prudente
-    return None
-
-def _all_existing(cfg: Config, dir_tif_loc: Path, prefix: str) -> List[Path]:
-    try:
-        return list(dir_tif_loc.glob(f"{prefix}*"))
-    except Exception:
-        return []
-
-def _group_by_rev(files: List[Path]) -> Dict[str, List[Tuple[Path, re.Match]]]:
-    out: Dict[str, List[Tuple[Path, re.Match]]] = {}
-    for ex in files:
-        me = BASE_NAME.search(ex.name)
-        if not me:
-            continue
-        out.setdefault(me.group(4), []).append((ex, me))
-    return out
+def _iter_candidates(dirp: Path, accept_pdf: bool):
+    exts = {".tif"}
+    if accept_pdf:
+        exts.add(".pdf")
+    with os.scandir(dirp) as it:
+        for de in it:
+            if de.is_file():
+                suf = os.path.splitext(de.name)[1].lower()
+                if suf in exts:
+                    yield Path(de.path)
 
 def archive_once(cfg: Config) -> bool:
     start = time.time()
-    normalize_extensions(cfg.DIR_HPLOTTER)
+    clear_orientation_cache()
     did_something = False
 
-    patterns = ["*.tif"]
-    if cfg.ACCEPT_PDF:
-        patterns.append("*.pdf")
+    with timeit("scan candidati (hplotter)"):
+        candidates: List[Path] = list(_iter_candidates(cfg.DIR_HPLOTTER, cfg.ACCEPT_PDF))
 
-    candidates: List[Path] = []
-    for pat in patterns:
-        candidates.extend(cfg.DIR_HPLOTTER.glob(pat))
-
-    for p in sorted(candidates):
+    # worker per processare un singolo file (I/O-bound -> thread ok)
+    def process_one(p: Path):
+        nonlocal did_something
         did_something = True
 
-        m = BASE_NAME.search(p.name)
-        if not m:
-            log_error(cfg, p.name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); continue
-        if m.group(1).upper() not in "ABCDE":
-            log_error(cfg, p.name, "Formato Errato"); move_to(p, cfg.ERROR_DIR); continue
-        if m.group(2).upper() not in "MKFTESNP":
-            log_error(cfg, p.name, "Location Errata"); move_to(p, cfg.ERROR_DIR); continue
-        if m.group(6).upper() not in "MIDN":
-            log_error(cfg, p.name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); continue
-        if not check_orientation_ok(p):
-            log_error(cfg, p.name, "Immagine Girata"); move_to(p, cfg.ERROR_DIR); continue
+        # normalizzazione estensione on-the-fly
+        suf = p.suffix
+        if suf == ".TIF":
+            q = p.with_suffix(".tif")
+            try: p.rename(q); p = q
+            except Exception: pass
+        elif suf.lower() == ".tiff":
+            q = p.with_suffix(".tif")
+            try: p.rename(q); p = q
+            except Exception: pass
 
-        new_rev = m.group(4)
-        new_sheet = m.group(5)
+        name = p.name
+        with timeit(f"{name} regex+validate"):
+            m = BASE_NAME.fullmatch(name)
+            if not m:
+                log_error(cfg, name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); return
+            if m.group(1).upper() not in "ABCDE":
+                log_error(cfg, name, "Formato Errato"); move_to(p, cfg.ERROR_DIR); return
+            if m.group(2).upper() not in "MKFTESNP":
+                log_error(cfg, name, "Location Errata"); move_to(p, cfg.ERROR_DIR); return
+            if m.group(6).upper() not in "MIDN":
+                log_error(cfg, name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); return
+
+        new_rev    = m.group(4)
+        new_sheet  = m.group(5)
         new_metric = m.group(6).upper()
 
-        loc = map_location(m, cfg)
-        dir_tif_loc = loc["dir_tif_loc"]; tiflog = loc["log_name"]
+        with timeit(f"{name} map_location"):
+            loc = map_location(m, cfg)
+            dir_tif_loc = loc["dir_tif_loc"]
+            tiflog      = loc["log_name"]
 
-        prefix = f"D{m.group(1)}{m.group(2)}{m.group(3)}"
-        existing = _all_existing(cfg, dir_tif_loc, prefix)
-        groups = _group_by_rev(existing)
-        existing_revs = set(groups.keys())
+        # === UNICA QUERY (con cache condivisa) per (dir, docno, sheet)
+        with timeit(f"{name} list_same_doc_same_sheet"):
+            same_sheet = _get_same_sheet(dir_tif_loc, m, new_sheet)
 
-        # ---- PARI REVISIONE (filename identico) ---------------------------------------
-        if (dir_tif_loc / p.name).exists():
-            log_error(cfg, p.name, "Pari Revisione"); move_to(p, cfg.PARI_REV_DIR); continue
-        # ------------------------------------------------------------------------------
+        # Deriva "same_rs" filtrando la lista unica
+        with timeit(f"{name} derive_same_rs"):
+            same_rs = [(r, nm, met, sh) for (r, nm, met, sh) in same_sheet if r == new_rev]
 
-        # ---- GESTIONE REVISIONI (sempre PRIMA del regime) -----------------------------
-        if existing_revs:
-            # trova la revisione "attiva" più alta tra quelle presenti
-            max_rev = max(existing_revs)
-            if new_rev > max_rev:
-                # nuova revisione: archivia TUTTE le precedenti (tutti fogli/metriche)
-                for rold, filelist in groups.items():
-                    for ex, _ in filelist:
-                        move_to(ex, cfg.ARCHIVIO_STORICO)
-                        log_swarky(cfg, p.name, tiflog, "Rev superata", ex.name, dest="Storico")
-                # continue con R_new come prima occorrenza (regime verrà impostato sotto)
-                existing = []
-                groups = {}
-                existing_revs = set()
-            elif new_rev < max_rev:
-                # revisione precedente: errore
-                # referenzia uno degli esistenti più nuovi
-                ref = groups[max_rev][0][0].name
-                log_error(cfg, p.name, "Revisione Precendente", ref)
-                move_to(p, cfg.ERROR_DIR)
-                continue
-            else:
-                # new_rev == max_rev → stessa revisione: si passa al controllo regime
-                pass
-        # ------------------------------------------------------------------------------
+        # 1) Pari revisione
+        with timeit(f"{name} check_same_filename (early)"):
+            if any(nm == name for _, nm, _, _ in same_rs):
+                log_error(cfg, name, "Pari Revisione")
+                move_to(p, cfg.PARI_REV_DIR)
+                return
 
-        # ---- CONTROLLO PARI REVISIONE (stessa R+S+UOM) --------------------------------
-        same_rev_same_sheet_same_metric = False
-        ref_eq = ""
-        for ex, me in groups.get(new_rev, []):
-            if me.group(5) == new_sheet and me.group(6).upper() == new_metric:
-                same_rev_same_sheet_same_metric = True
-                ref_eq = ex.name
-                break
-        if same_rev_same_sheet_same_metric:
-            log_error(cfg, p.name, "Pari Revisione", ref_eq)
-            move_to(p, cfg.PARI_REV_DIR)
-            continue
-        # ------------------------------------------------------------------------------
+        # 2) Max revisione (derivato)
+        with timeit(f"{name} probe_max_rev_same_sheet"):
+            max_rev_same_sheet = None
+            for r, _, _, _ in same_sheet:
+                if (max_rev_same_sheet is None) or (r > max_rev_same_sheet):
+                    max_rev_same_sheet = r
 
-        # ---- GESTIONE REGIME (stessa revisione attiva) --------------------------------
-        # calcola regime corrente per R=new_rev
-        current_uoms = [me.group(6).upper() for _, me in groups.get(new_rev, [])]
-        regime = _detect_regime(current_uoms)  # "MI", "D", "N" oppure None
+        # 3) Decisione revisione
+        with timeit(f"{name} rev_decision"):
+            if max_rev_same_sheet is not None:
+                if new_rev < max_rev_same_sheet:
+                    ref = next((nm for r, nm, _, _ in same_sheet if r == max_rev_same_sheet), "")
+                    log_error(cfg, name, "Revisione Precendente", ref)
+                    move_to(p, cfg.ERROR_DIR)
+                    return
+                elif new_rev > max_rev_same_sheet:
+                    # Sposta in storico tutte le rev < new_rev per lo stesso sheet
+                    with timeit(f"{name} move_old_revs_same_sheet"), _doc_lock(dir_tif_loc, m):
+                        for r, nm, _, _ in same_sheet:
+                            if int(r) < int(new_rev):
+                                old_path = dir_tif_loc / nm
+                                if old_path.exists():
+                                    move_to(old_path, cfg.ARCHIVIO_STORICO)
+                                    log_swarky(cfg, name, tiflog, "Rev superata", nm, dest="Storico")
+                        # invalida solo questa chiave (dir, docno, sheet)
+                        _invalidate_same_sheet(dir_tif_loc, m, new_sheet)
+                else:
+                    # stessa rev e sheet -> metrica diversa?
+                    other = next((nm for _, nm, met, _ in same_rs if met != new_metric), None)
+                    if other:
+                        log_swarky(cfg, name, tiflog, "Metrica Diversa", other)
 
+        # 4) ACCETTAZIONE finale
         def accept_with_logs():
-            # log informativi se presenti file stessa R con foglio diverso o metrica diversa
-            for ex, me in groups.get(new_rev, []):
-                ex_sheet = me.group(5)
-                ex_uom = me.group(6).upper()
-                if ex_sheet != new_sheet:
-                    log_swarky(cfg, p.name, tiflog, "Foglio Diverso", ex.name)
-                elif ex_uom != new_metric:
-                    # questo accade in regime MI sullo stesso foglio
-                    log_swarky(cfg, p.name, tiflog, "Metrica Diversa", ex.name)
-            # procedi con PLM + archivio + EDI
-            copy_to(p, cfg.PLM_DIR)
-            move_to(p, dir_tif_loc)
-            try:
-                write_edi(cfg, p.name, cfg.PLM_DIR, m=m, loc=loc)
-            except Exception as e:
-                logging.exception("Impossibile creare DESEDI per %s: %s", p.name, e)
-            log_swarky(cfg, p.name, tiflog, "Archiviato", "", dest=tiflog)
+            with timeit(f"{name} orientamento"):
+                if not check_orientation_ok(p):
+                    log_error(cfg, name, "Immagine Girata")
+                    move_to(p, cfg.ERROR_DIR)
+                    return
 
-        if not current_uoms:
-            # prima occorrenza di questa revisione → imposta regime dal nuovo file
+            # lock per docno per evitare race con altri worker che toccano lo stesso doc
+            with _doc_lock(dir_tif_loc, m):
+                with timeit(f"{name} move_to_archivio"):
+                    move_to(p, dir_tif_loc)
+                    new_path = dir_tif_loc / name
+                    # invalida la cache solo per questa chiave
+                    _invalidate_same_sheet(dir_tif_loc, m, new_sheet)
+
+                with timeit(f"{name} link/copy_to_PLM"):
+                    try:
+                        _fast_copy_or_link(new_path, cfg.PLM_DIR / name)
+                    except Exception as e:
+                        logging.exception("PLM copy/link fallita per %s: %s", new_path, e)
+
+                with timeit(f"{name} write_EDI"):
+                    try:
+                        write_edi(cfg, name, cfg.PLM_DIR, m=m, loc=loc)
+                    except Exception as e:
+                        logging.exception("Impossibile creare DESEDI per %s: %s", name, e)
+
+                log_swarky(cfg, name, tiflog, "Archiviato", "", dest=tiflog)
+
+        with timeit(f"{name} accept"):
             accept_with_logs()
-            continue
 
-        # abbiamo già file con stessa revisione
-        if regime == "MI":
-            if new_metric in ("M", "I"):
-                # ammesso
-                accept_with_logs()
-            else:
-                # tentativo di cambio regime a parità di revisione → PR
-                log_error(cfg, p.name, "Pari Revisione (Regime incompatibile)")
-                move_to(p, cfg.PARI_REV_DIR)
-            continue
-
-        if regime == "D":
-            if new_metric == "D":
-                accept_with_logs()
-            else:
-                log_error(cfg, p.name, "Pari Revisione (Regime incompatibile)")
-                move_to(p, cfg.PARI_REV_DIR)
-            continue
-
-        if regime == "N":
-            if new_metric == "N":
-                accept_with_logs()
-            else:
-                log_error(cfg, p.name, "Pari Revisione (Regime incompatibile)")
-                move_to(p, cfg.PARI_REV_DIR)
-            continue
-
-        # regime indeterminato (stato anomalo): per prudenza non consentiamo cambio a stessa R
-        log_error(cfg, p.name, "Pari Revisione (Regime indeterminato)")
-        move_to(p, cfg.PARI_REV_DIR)
+    # <<< ESECUZIONE CONCORRENTE >>>
+    # Non esagerare: 4–8 thread è lo sweet spot su SMB; partiamo da 6
+    workers = min(8, max(4, (os.cpu_count() or 4)))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(process_one, p) for p in candidates]
+        for _ in as_completed(futures):
+            pass
 
     if did_something:
         elapsed = time.time() - start
-        write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER)/f"Swarky_{datetime.now().strftime('%b.%Y')}.log",
+        write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER) / f"Swarky_{datetime.now().strftime('%b.%Y')}.log",
                     [f"ProcessTime # {elapsed:.2f}s"])
+        logging.info("TIMER %-40s %8.1f ms", "TOTAL archive_once", elapsed * 1000.0)
     return did_something
 
+# ---- ISS / FIV ----------------------------------------------------------------------
+
 def iss_loading(cfg: Config):
-    for p in sorted(cfg.DIR_ISS.glob("*.pdf")):
-        m = ISS_BASENAME.search(p.name)
-        if not m: continue
-        move_to(p, cfg.PLM_DIR)
+    try:
+        candidates = [p for p in cfg.DIR_ISS.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
+    except Exception as e:
+        logging.exception("ISS: impossibile leggere la cartella %s: %s", cfg.DIR_ISS, e)
+        return
+    for p in candidates:
+        m = ISS_BASENAME.fullmatch(p.name)
+        if not m:
+            log_error(cfg, p.name, "Nome ISS Errato")
+            continue
         try:
+            move_to(p, cfg.PLM_DIR)
             write_edi(cfg, file_name=p.name, out_dir=cfg.PLM_DIR, iss_match=m)
+            log_swarky(cfg, p.name, "ISS", "ISS", "", "")
         except Exception as e:
-            logging.exception("Impossibile creare DESEDI (ISS) per %s: %s", p.name, e)
-        now = datetime.now()
-        stem = p.stem
-        log = cfg.DIR_ISS/"SwarkyISS.log"
-        write_lines(log, [f"{now.strftime('%d.%b.%Y')} # {now.strftime('%H:%M:%S')} # {stem}"])
+            logging.exception("Impossibile processare ISS %s: %s", p.name, e)
+        try:
+            now = datetime.now()
+            stem = p.stem
+            log = cfg.DIR_ISS / "SwarkyISS.log"
+            write_lines(log, [f"{now.strftime('%d.%b.%Y')} # {now.strftime('%H:%M:%S')} # {stem}"])
+        except Exception:
+            logging.exception("ISS: impossibile aggiornare SwarkyISS.log")
 
 def fiv_loading(cfg: Config):
-    for p in sorted(cfg.DIR_FIV_LOADING.glob("*")):
-        if not p.is_file(): continue
-        m = BASE_NAME.search(p.name)
-        if not m: continue
+    try:
+        files = [p for p in cfg.DIR_FIV_LOADING.iterdir() if p.is_file()]
+    except Exception as e:
+        logging.exception("FIV: lettura cartella fallita: %s", e)
+        return
+    for p in files:
+        ext = p.suffix.lower()
+        if ext not in (".tif", ".tiff") and not (cfg.ACCEPT_PDF and ext == ".pdf"):
+            continue
+        m = BASE_NAME.fullmatch(p.name)
+        if not m:
+            log_error(cfg, p.name, "Nome FIV Errato")
+            continue
         loc = map_location(m, cfg)
         try:
             write_edi(cfg, m=m, file_name=p.name, loc=loc, out_dir=cfg.PLM_DIR)
+            move_to(p, cfg.PLM_DIR)
+            log_swarky(cfg, p.name, "FIV", "FIV loading", "", "")
         except Exception as e:
-            logging.exception("Impossibile creare DESEDI (FIV) per %s: %s", p.name, e)
-        move_to(p, cfg.PLM_DIR)
-        log_swarky(cfg, p.name, loc["log_name"], "Fiv Loading", dest="PLM")
+            logging.exception("Impossibile processare FIV %s: %s", p.name, e)
+
+# ---- STATS --------------------------------------------------------------------------
 
 def count_tif_files(cfg: Config) -> dict:
     def count(d: Path, *patterns: str) -> int:
@@ -508,6 +624,8 @@ def count_tif_files(cfg: Config) -> dict:
         "Tab Dwg": count(cfg.DIR_TABELLARI, "*.tif", "*.pdf"),
         "Kal Dwg": count(cfg.DIR_KALT, "*.tif", "*.pdf"),
     }
+
+# ---- LOOP ----------------------------------------------------------------------------
 
 def run_once(cfg: Config) -> bool:
     did_something = archive_once(cfg)
@@ -535,10 +653,15 @@ def load_config(path: Path) -> Config:
     data = json.loads(path.read_text(encoding="utf-8"))
     return Config.from_json(data)
 
+from perf import enable
+
 def main(argv: List[str]):
     args = parse_args(argv)
     cfg = load_config(Path("config.json"))
     setup_logging(cfg)
+
+    enable(True)  # attiva i timer (puoi disattivarli da perf.enable(False))
+
     if args.watch > 0:
         watch_loop(cfg, args.watch)
     else:
