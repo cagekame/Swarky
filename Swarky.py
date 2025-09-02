@@ -363,48 +363,97 @@ def write_edi(
     )
     write_lines(edi, body)
 
-# ---- CACHE THREAD-SAFE per lista "stesso docno+sheet" -------------------------------
+# ---- ENUM UNA VOLTA PER CARTELLA + UPDATE IN-PLACE (stile VB) ----------------------
 import threading
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# cache: (dir_str, docno, sheet) -> list parsed [(rev, name, metric, sheet)]
-_SAME_SHEET_CACHE: dict[tuple[str, str, str], list[tuple[str,str,str,str]]] = {}
-_SAME_SHEET_LOCKS: dict[tuple[str, str], threading.Lock] = defaultdict(threading.Lock)  # (dir_str, docno)
-_CACHE_MUTEX = threading.Lock()
+# Cache della cartella: dir -> tuple(names)
+_DIR_LIST_CACHE: dict[str, tuple[str, ...]] = {}
+_DIR_CACHE_LOCKS: dict[str, threading.Lock] = defaultdict(threading.Lock)
+_DIR_CACHE_MUTEX = threading.Lock()
+
+def _dir_key(dirp: Path) -> str:
+    return str(dirp)
+
+def _ensure_dir_listing(dirp: Path) -> tuple[str, ...]:
+    """
+    Se la cartella non è in cache: fa UNA sola os.scandir(dirp) e memorizza SOLO i nomi (.tif/.pdf).
+    Se è già in cache: ritorna i nomi dalla RAM (0 ms).
+    """
+    key = _dir_key(dirp)
+    with _DIR_CACHE_MUTEX:
+        cur = _DIR_LIST_CACHE.get(key)
+        if cur is not None:
+            return cur
+    # Lock per evitare doppia enumerazione in parallelo sulla stessa cartella
+    with _DIR_CACHE_LOCKS[key]:
+        with _DIR_CACHE_MUTEX:
+            cur = _DIR_LIST_CACHE.get(key)
+            if cur is not None:
+                return cur
+        names: list[str] = []
+        try:
+            with os.scandir(dirp) as it:
+                for de in it:
+                    if de.is_file():
+                        suf = os.path.splitext(de.name)[1].lower()
+                        if suf in (".tif", ".pdf"):
+                            names.append(de.name)
+        except FileNotFoundError:
+            names = []
+        tup = tuple(names)
+        with _DIR_CACHE_MUTEX:
+            _DIR_LIST_CACHE[key] = tup
+        return tup
+
+def _dir_cache_remove_name(dirp: Path, name: str) -> None:
+    """Rimuove 'name' dalla cache della cartella (se presente) SENZA rifare scandir."""
+    key = _dir_key(dirp)
+    with _DIR_CACHE_MUTEX:
+        cur = _DIR_LIST_CACHE.get(key)
+        if not cur or name not in cur:
+            return
+        lst = list(cur)
+        try:
+            lst.remove(name)
+        except ValueError:
+            pass
+        _DIR_LIST_CACHE[key] = tuple(lst)
+
+def _dir_cache_add_name(dirp: Path, name: str) -> None:
+    """Aggiunge 'name' alla cache se la cartella è già stata enumerata (niente scandir)."""
+    key = _dir_key(dirp)
+    with _DIR_CACHE_MUTEX:
+        cur = _DIR_LIST_CACHE.get(key)
+        if cur is None:
+            # Non forziamo scandir qui: ci penserà _ensure_dir_listing quando servirà.
+            return
+        if name in cur:
+            return
+        _DIR_LIST_CACHE[key] = cur + (name,)
 
 def _docno_from_match(m: re.Match) -> str:
     return f"D{m.group(1)}{m.group(2)}{m.group(3)}"
 
-def _cache_key(dirp: Path, m: re.Match, sheet: str) -> tuple[str, str, str]:
-    return (str(dirp), _docno_from_match(m), sheet)
-
-def _invalidate_same_sheet(dirp: Path, m: re.Match, sheet: str):
-    key = _cache_key(dirp, m, sheet)
-    with _CACHE_MUTEX:
-        _SAME_SHEET_CACHE.pop(key, None)
-
-def _get_same_sheet(dirp: Path, m: re.Match, sheet: str) -> list[tuple[str,str,str,str]]:
+def _list_same_doc_same_sheet_from_cache(dirp: Path, m: re.Match, sheet: str) -> list[tuple[str,str,str,str]]:
     """
-    Restituisce la lista parsed per (dir, docno, sheet) con cache condivisa.
-    Non invalida automaticamente (lo facciamo quando spostiamo file).
+    Usa SOLO la cache della cartella (se manca, crea una volta con _ensure_dir_listing)
+    e filtra in RAM: [(rev, name, metric, sheet)] per docno+sheet.
     """
-    key = _cache_key(dirp, m, sheet)
-    with _CACHE_MUTEX:
-        cached = _SAME_SHEET_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    # MISS: esegui la glob e metti in cache
-    names = _glob_names(key[0], f"{key[1]}R??S{key[2]}*")
-    parsed = _parse_prefixed(names)
-    with _CACHE_MUTEX:
-        _SAME_SHEET_CACHE[key] = parsed
-    return parsed
-
-def _doc_lock(dirp: Path, m: re.Match) -> threading.Lock:
-    # lock per operazioni che modificano FS relative a un docno (qualsiasi sheet)
-    return _SAME_SHEET_LOCKS[(str(dirp), _docno_from_match(m))]
+    listing = _ensure_dir_listing(dirp)
+    docno = _docno_from_match(m)
+    prefix = f"{docno}R"
+    out: list[tuple[str,str,str,str]] = []
+    for nm in listing:
+        if not nm.startswith(prefix):
+            continue
+        mm = BASE_NAME.fullmatch(nm)
+        if not mm:
+            continue
+        if mm.group(5) != sheet:
+            continue
+        out.append((mm.group(4), nm, mm.group(6).upper(), mm.group(5)))
+    return out
 
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
@@ -427,9 +476,7 @@ def archive_once(cfg: Config) -> bool:
     with timeit("scan candidati (hplotter)"):
         candidates: List[Path] = list(_iter_candidates(cfg.DIR_HPLOTTER, cfg.ACCEPT_PDF))
 
-    # worker per processare un singolo file (I/O-bound -> thread ok)
-    def process_one(p: Path):
-        nonlocal did_something
+    for p in candidates:
         did_something = True
 
         # normalizzazione estensione on-the-fly
@@ -447,13 +494,13 @@ def archive_once(cfg: Config) -> bool:
         with timeit(f"{name} regex+validate"):
             m = BASE_NAME.fullmatch(name)
             if not m:
-                log_error(cfg, name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); return
+                log_error(cfg, name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); continue
             if m.group(1).upper() not in "ABCDE":
-                log_error(cfg, name, "Formato Errato"); move_to(p, cfg.ERROR_DIR); return
+                log_error(cfg, name, "Formato Errato"); move_to(p, cfg.ERROR_DIR); continue
             if m.group(2).upper() not in "MKFTESNP":
-                log_error(cfg, name, "Location Errata"); move_to(p, cfg.ERROR_DIR); return
+                log_error(cfg, name, "Location Errata"); move_to(p, cfg.ERROR_DIR); continue
             if m.group(6).upper() not in "MIDN":
-                log_error(cfg, name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); return
+                log_error(cfg, name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); continue
 
         new_rev    = m.group(4)
         new_sheet  = m.group(5)
@@ -464,49 +511,49 @@ def archive_once(cfg: Config) -> bool:
             dir_tif_loc = loc["dir_tif_loc"]
             tiflog      = loc["log_name"]
 
-        # === UNICA QUERY (con cache condivisa) per (dir, docno, sheet)
+        # === UNA SOLA ENUM PER CARTELLA (se serve), poi TUTTO IN RAM ==================
         with timeit(f"{name} list_same_doc_same_sheet"):
-            same_sheet = _get_same_sheet(dir_tif_loc, m, new_sheet)
+            same_sheet = _list_same_doc_same_sheet_from_cache(dir_tif_loc, m, new_sheet)
 
-        # Deriva "same_rs" filtrando la lista unica
         with timeit(f"{name} derive_same_rs"):
             same_rs = [(r, nm, met, sh) for (r, nm, met, sh) in same_sheet if r == new_rev]
 
-        # 1) Pari revisione
+        # 1) Pari revisione (stesso nome già presente?)
         with timeit(f"{name} check_same_filename (early)"):
             if any(nm == name for _, nm, _, _ in same_rs):
                 log_error(cfg, name, "Pari Revisione")
                 move_to(p, cfg.PARI_REV_DIR)
-                return
+                # aggiornamento in-place cache sorgente/destinazione non necessario per prestazioni
+                continue
 
-        # 2) Max revisione (derivato)
+        # 2) Max revisione dal RAM
         with timeit(f"{name} probe_max_rev_same_sheet"):
             max_rev_same_sheet = None
             for r, _, _, _ in same_sheet:
                 if (max_rev_same_sheet is None) or (r > max_rev_same_sheet):
                     max_rev_same_sheet = r
 
-        # 3) Decisione revisione
+        # 3) Decisioni revisione
         with timeit(f"{name} rev_decision"):
             if max_rev_same_sheet is not None:
                 if new_rev < max_rev_same_sheet:
                     ref = next((nm for r, nm, _, _ in same_sheet if r == max_rev_same_sheet), "")
                     log_error(cfg, name, "Revisione Precendente", ref)
                     move_to(p, cfg.ERROR_DIR)
-                    return
+                    continue
                 elif new_rev > max_rev_same_sheet:
                     # Sposta in storico tutte le rev < new_rev per lo stesso sheet
-                    with timeit(f"{name} move_old_revs_same_sheet"), _doc_lock(dir_tif_loc, m):
+                    with timeit(f"{name} move_old_revs_same_sheet"):
                         for r, nm, _, _ in same_sheet:
                             if int(r) < int(new_rev):
                                 old_path = dir_tif_loc / nm
                                 if old_path.exists():
                                     move_to(old_path, cfg.ARCHIVIO_STORICO)
                                     log_swarky(cfg, name, tiflog, "Rev superata", nm, dest="Storico")
-                        # invalida solo questa chiave (dir, docno, sheet)
-                        _invalidate_same_sheet(dir_tif_loc, m, new_sheet)
+                                    # === UPDATE IN-PLACE: il file non è più in questa cartella
+                                    _dir_cache_remove_name(dir_tif_loc, nm)
                 else:
-                    # stessa rev e sheet -> metrica diversa?
+                    # stessa rev & sheet -> metrica diversa?
                     other = next((nm for _, nm, met, _ in same_rs if met != new_metric), None)
                     if other:
                         log_swarky(cfg, name, tiflog, "Metrica Diversa", other)
@@ -519,38 +566,29 @@ def archive_once(cfg: Config) -> bool:
                     move_to(p, cfg.ERROR_DIR)
                     return
 
-            # lock per docno per evitare race con altri worker che toccano lo stesso doc
-            with _doc_lock(dir_tif_loc, m):
-                with timeit(f"{name} move_to_archivio"):
-                    move_to(p, dir_tif_loc)
-                    new_path = dir_tif_loc / name
-                    # invalida la cache solo per questa chiave
-                    _invalidate_same_sheet(dir_tif_loc, m, new_sheet)
+            with timeit(f"{name} move_to_archivio"):
+                move_to(p, dir_tif_loc)
+                new_path = dir_tif_loc / name
+                # === UPDATE IN-PLACE: ora questo nome esiste nella cartella
+                _dir_cache_add_name(dir_tif_loc, name)
 
-                with timeit(f"{name} link/copy_to_PLM"):
-                    try:
-                        _fast_copy_or_link(new_path, cfg.PLM_DIR / name)
-                    except Exception as e:
-                        logging.exception("PLM copy/link fallita per %s: %s", new_path, e)
+            with timeit(f"{name} link/copy_to_PLM"):
+                try:
+                    _fast_copy_or_link(new_path, cfg.PLM_DIR / name)
+                except Exception as e:
+                    logging.exception("PLM copy/link fallita per %s: %s", new_path, e)
 
-                with timeit(f"{name} write_EDI"):
-                    try:
-                        write_edi(cfg, name, cfg.PLM_DIR, m=m, loc=loc)
-                    except Exception as e:
-                        logging.exception("Impossibile creare DESEDI per %s: %s", name, e)
+            with timeit(f"{name} write_EDI"):
+                try:
+                    write_edi(cfg, name, cfg.PLM_DIR, m=m, loc=loc)
+                except Exception as e:
+                    logging.exception("Impossibile creare DESEDI per %s: %s", name, e)
 
-                log_swarky(cfg, name, tiflog, "Archiviato", "", dest=tiflog)
+            log_swarky(cfg, name, tiflog, "Archiviato", "", dest=tiflog)
 
         with timeit(f"{name} accept"):
             accept_with_logs()
-
-    # <<< ESECUZIONE CONCORRENTE >>>
-    # Non esagerare: 4–8 thread è lo sweet spot su SMB; partiamo da 6
-    workers = min(8, max(4, (os.cpu_count() or 4)))
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(process_one, p) for p in candidates]
-        for _ in as_completed(futures):
-            pass
+            continue
 
     if did_something:
         elapsed = time.time() - start
