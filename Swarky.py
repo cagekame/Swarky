@@ -60,23 +60,63 @@ class Config:
 BASE_NAME = re.compile(r"D(\w)(\w)(\d{6})R(\d{2})S(\d{2})(\w)\.(tif|pdf)$", re.IGNORECASE)
 ISS_BASENAME = re.compile(r"G(\d{4})([A-Za-z0-9]{4})([A-Za-z0-9]{6})ISSR(\d{2})S(\d{2})\.pdf$", re.IGNORECASE)
 
-# ---- LISTA PER FOGlIO (unica query) -------------------------------------------------
-import glob
-from functools import lru_cache
+# ---- PREFISSO DOCNO: LISTA NOMI SENZA ENUM COMPLETA (WinAPI) -------------------------
+# Risoluzione wildcard lato server con FindFirstFileW (nessuna installazione)
+import ctypes, ctypes.wintypes as wt
+
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+FILE_ATTRIBUTE_DIRECTORY = 0x10
+
+class WIN32_FIND_DATAW(ctypes.Structure):
+    _fields_ = [
+        ("dwFileAttributes", wt.DWORD),
+        ("ftCreationTime", wt.FILETIME),
+        ("ftLastAccessTime", wt.FILETIME),
+        ("ftLastWriteTime", wt.FILETIME),
+        ("nFileSizeHigh", wt.DWORD),
+        ("nFileSizeLow", wt.DWORD),
+        ("dwReserved0", wt.DWORD),
+        ("dwReserved1", wt.DWORD),
+        ("cFileName", ctypes.c_wchar * 260),
+        ("cAlternateFileName", ctypes.c_wchar * 14),
+    ]
+
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_FindFirstFileW = _k32.FindFirstFileW
+_FindFirstFileW.argtypes = [wt.LPCWSTR, ctypes.POINTER(WIN32_FIND_DATAW)]
+_FindFirstFileW.restype  = wt.HANDLE
+_FindNextFileW  = _k32.FindNextFileW
+_FindNextFileW.argtypes  = [wt.HANDLE, ctypes.POINTER(WIN32_FIND_DATAW)]
+_FindNextFileW.restype   = wt.BOOL
+_FindClose      = _k32.FindClose
+_FindClose.argtypes      = [wt.HANDLE]
+_FindClose.restype       = wt.BOOL
+
+def _win_find_names(dirp: Path, pattern: str) -> tuple[str, ...]:
+    """Ritorna i NOMI file che matchano pattern in dirp, match lato server (veloce su SMB)."""
+    query = str(dirp / pattern)
+    data = WIN32_FIND_DATAW()
+    h = _FindFirstFileW(query, ctypes.byref(data))
+    if h == INVALID_HANDLE_VALUE:
+        return tuple()
+    names: list[str] = []
+    try:
+        while True:
+            nm = data.cFileName
+            if nm not in (".", ".."):
+                if not (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY):
+                    names.append(nm)
+            if not _FindNextFileW(h, ctypes.byref(data)):
+                break
+    finally:
+        _FindClose(h)
+    return tuple(names)
 
 def _docno_from_match(m: re.Match) -> str:
     return f"D{m.group(1)}{m.group(2)}{m.group(3)}"
 
-@lru_cache(maxsize=16384)
-def _glob_names(dirp_str: str, pattern: str) -> tuple[str, ...]:
-    patt = os.path.join(dirp_str, pattern)
-    return tuple(os.path.basename(p) for p in glob.iglob(patt))
-
-def _clear_glob_cache():
-    _glob_names.cache_clear()
-
 def _parse_prefixed(names: tuple[str, ...]) -> list[tuple[str, str, str, str]]:
-    """-> [(rev, name, metric, sheet)]"""
+    """-> [(rev, name, metric, sheet)]  (rev='02', metric in {M,I,D,N}, sheet='01')"""
     out: list[tuple[str, str, str, str]] = []
     for nm in names:
         mm = BASE_NAME.fullmatch(nm)
@@ -84,21 +124,19 @@ def _parse_prefixed(names: tuple[str, ...]) -> list[tuple[str, str, str, str]]:
             out.append((mm.group(4), nm, mm.group(6).upper(), mm.group(5)))
     return out
 
-def _list_same_doc_same_sheet(dirp: Path, m: re.Match, sheet: str) -> list[tuple[str,str,str,str]]:
-    """Unica query SMB: stesso docno + stesso foglio (qualsiasi rev/metrica)."""
+def _list_same_doc_prefisso(dirp: Path, m: re.Match) -> list[tuple[str,str,str,str]]:
+    """
+    Unica query SMB per PREFISSO DOCNO (non tutta la cartella).
+    Prende TUTTI i nomi che iniziano con docno (qualsiasi R??, S??, metrica; solo .tif/.pdf),
+    poi il resto dei controlli (rev/sheet/uom) avviene in RAM.
+    """
     docno = _docno_from_match(m)
-    names = _glob_names(str(dirp), f"{docno}R??S{sheet}*")
+    names_tif = _win_find_names(dirp, f"{docno}*.tif")
+    names_pdf = _win_find_names(dirp, f"{docno}*.pdf")
+    if not names_tif and not names_pdf:
+        return []
+    names = tuple(sorted(set(names_tif) | set(names_pdf)))
     return _parse_prefixed(names)
-
-# ---- PROBE (derivati dalla lista unica) ---------------------------------------------
-def _probe_max_rev_same_sheet_from_list(parsed: list[tuple[str,str,str,str]]) -> Optional[str]:
-    if not parsed:
-        return None
-    mx = None
-    for r, _, _, _ in parsed:
-        if (mx is None) or (r > mx):
-            mx = r
-    return mx
 
 # ---- LOGGING -------------------------------------------------------------------------
 
@@ -122,8 +160,8 @@ def setup_logging(cfg: Config):
 
 # ---- FS UTILS ------------------------------------------------------------------------
 
-# hardlink se possibile, fallback a copy2
 def _fast_copy_or_link(src: Path, dst: Path):
+    """hardlink se possibile, fallback a copy2"""
     try:
         os.link(src, dst)
     except OSError:
@@ -363,102 +401,10 @@ def write_edi(
     )
     write_lines(edi, body)
 
-# ---- ENUM UNA VOLTA PER CARTELLA + UPDATE IN-PLACE (stile VB) ----------------------
-import threading
-from collections import defaultdict
-from bisect import bisect_left, insort
-
-# Cache della cartella: dir -> tuple(names)
-_DIR_LIST_CACHE: dict[str, tuple[str, ...]] = {}
-_DIR_CACHE_LOCKS: dict[str, threading.Lock] = defaultdict(threading.Lock)
-_DIR_CACHE_MUTEX = threading.Lock()
-
-def _dir_key(dirp: Path) -> str:
-    return str(dirp)
-
-def _ensure_dir_listing(dirp: Path) -> tuple[str, ...]:
-    """
-    Se la cartella non è in cache: fa UNA sola os.scandir(dirp) e memorizza SOLO i nomi (.tif/.pdf).
-    Se è già in cache: ritorna i nomi dalla RAM (0 ms).
-    """
-    key = _dir_key(dirp)
-    with _DIR_CACHE_MUTEX:
-        cur = _DIR_LIST_CACHE.get(key)
-        if cur is not None:
-            return cur
-    # Lock per evitare doppia enumerazione in parallelo sulla stessa cartella
-    with _DIR_CACHE_LOCKS[key]:
-        with _DIR_CACHE_MUTEX:
-            cur = _DIR_LIST_CACHE.get(key)
-            if cur is not None:
-                return cur
-        names: list[str] = []
-        try:
-            with os.scandir(dirp) as it:
-                for de in it:
-                    if de.is_file():
-                        suf = os.path.splitext(de.name)[1].lower()
-                        if suf in (".tif", ".pdf"):
-                            names.append(de.name)
-        except FileNotFoundError:
-            names = []
-        names.sort()
-        tup = tuple(names)
-        with _DIR_CACHE_MUTEX:
-            _DIR_LIST_CACHE[key] = tup
-        return tup
-
-def _dir_cache_remove_name(dirp: Path, name: str) -> None:
-    """Rimuove 'name' dalla cache della cartella (se presente) SENZA rifare scandir."""
-    key = _dir_key(dirp)
-    with _DIR_CACHE_MUTEX:
-        cur = _DIR_LIST_CACHE.get(key)
-        if not cur:
-            return
-        i = bisect_left(cur, name)
-        if i >= len(cur) or cur[i] != name:
-            return
-        lst = list(cur)
-        lst.pop(i)
-        _DIR_LIST_CACHE[key] = tuple(lst)
-
-def _dir_cache_add_name(dirp: Path, name: str) -> None:
-    """Aggiunge 'name' alla cache se la cartella è già stata enumerata (niente scandir)."""
-    key = _dir_key(dirp)
-    with _DIR_CACHE_MUTEX:
-        cur = _DIR_LIST_CACHE.get(key)
-        if cur is None:
-            # Non forziamo scandir qui: ci penserà _ensure_dir_listing quando servirà.
-            return
-        if name in cur:
-            return
-        lst = list(cur)
-        insort(lst, name)
-        _DIR_LIST_CACHE[key] = tuple(lst)
-
-def _docno_from_match(m: re.Match) -> str:
-    return f"D{m.group(1)}{m.group(2)}{m.group(3)}"
-
-def _list_same_doc_same_sheet_from_cache(dirp: Path, m: re.Match, sheet: str) -> list[tuple[str,str,str,str]]:
-    """
-    Usa SOLO la cache della cartella (se manca, crea una volta con _ensure_dir_listing)
-    e filtra in RAM: [(rev, name, metric, sheet)] per docno+sheet.
-    """
-    listing = _ensure_dir_listing(dirp)
-    docno = _docno_from_match(m)
-    prefix = f"{docno}R"
-    start = bisect_left(listing, prefix)
-    end = bisect_left(listing, prefix + "~")
-    out: list[tuple[str,str,str,str]] = []
-    for nm in listing[start:end]:
-        mm = BASE_NAME.fullmatch(nm)
-        if mm and mm.group(5) == sheet:
-            out.append((mm.group(4), nm, mm.group(6).upper(), mm.group(5)))
-    return out
-
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
 def _iter_candidates(dirp: Path, accept_pdf: bool):
+    # Scansione solo della cartella Plotter (locale o comunque input): ok
     exts = {".tif"}
     if accept_pdf:
         exts.add(".pdf")
@@ -512,38 +458,47 @@ def archive_once(cfg: Config) -> bool:
             dir_tif_loc = loc["dir_tif_loc"]
             tiflog      = loc["log_name"]
 
-        # === UNA SOLA ENUM PER CARTELLA (se serve), poi TUTTO IN RAM ==================
-        with timeit(f"{name} list_same_doc_same_sheet"):
-            same_sheet = _list_same_doc_same_sheet_from_cache(dir_tif_loc, m, new_sheet)
+        # ADDED: fast-path pari revisione senza alcuna lista
+        with timeit(f"{name} check_same_filename (exists-fast)"):
+            if (dir_tif_loc / name).exists():
+                log_error(cfg, name, "Pari Revisione")
+                move_to(p, cfg.PARI_REV_DIR)
+                continue
+
+        # QUERY MIRATA: PREFISSO DOCNO (no enum completa)
+        with timeit(f"{name} list_same_doc_prefisso"):
+            same_doc = _list_same_doc_prefisso(dir_tif_loc, m)
+
+        with timeit(f"{name} derive_same_sheet"):
+            same_sheet = [(r, nm, met, sh) for (r, nm, met, sh) in same_doc if sh == new_sheet]
 
         with timeit(f"{name} derive_same_rs"):
             same_rs = [(r, nm, met, sh) for (r, nm, met, sh) in same_sheet if r == new_rev]
 
-        # 1) Pari revisione (stesso nome già presente?)
-        with timeit(f"{name} check_same_filename (early)"):
+        # 1) Pari revisione (ridondante ma sicuro, in RAM)
+        with timeit(f"{name} check_same_filename (list-verify)"):
             if any(nm == name for _, nm, _, _ in same_rs):
                 log_error(cfg, name, "Pari Revisione")
                 move_to(p, cfg.PARI_REV_DIR)
-                # aggiornamento in-place cache sorgente/destinazione non necessario per prestazioni
                 continue
 
-        # 2) Max revisione dal RAM
+        # 2) Max revisione per lo stesso sheet (in RAM)
         with timeit(f"{name} probe_max_rev_same_sheet"):
             max_rev_same_sheet = None
             for r, _, _, _ in same_sheet:
-                if (max_rev_same_sheet is None) or (r > max_rev_same_sheet):
+                if (max_rev_same_sheet is None) or (int(r) > int(max_rev_same_sheet)):
                     max_rev_same_sheet = r
 
         # 3) Decisioni revisione
         with timeit(f"{name} rev_decision"):
             if max_rev_same_sheet is not None:
-                if new_rev < max_rev_same_sheet:
+                if int(new_rev) < int(max_rev_same_sheet):
                     ref = next((nm for r, nm, _, _ in same_sheet if r == max_rev_same_sheet), "")
                     log_error(cfg, name, "Revisione Precendente", ref)
                     move_to(p, cfg.ERROR_DIR)
                     continue
-                elif new_rev > max_rev_same_sheet:
-                    # Sposta in storico tutte le rev < new_rev per lo stesso sheet
+                elif int(new_rev) > int(max_rev_same_sheet):
+                    # Sposta in storico tutte le rev < new_rev per lo stesso sheet (usando SOLO la lista già ottenuta)
                     with timeit(f"{name} move_old_revs_same_sheet"):
                         for r, nm, _, _ in same_sheet:
                             if int(r) < int(new_rev):
@@ -551,8 +506,6 @@ def archive_once(cfg: Config) -> bool:
                                 if old_path.exists():
                                     move_to(old_path, cfg.ARCHIVIO_STORICO)
                                     log_swarky(cfg, name, tiflog, "Rev superata", nm, dest="Storico")
-                                    # === UPDATE IN-PLACE: il file non è più in questa cartella
-                                    _dir_cache_remove_name(dir_tif_loc, nm)
                 else:
                     # stessa rev & sheet -> metrica diversa?
                     other = next((nm for _, nm, met, _ in same_rs if met != new_metric), None)
@@ -570,8 +523,6 @@ def archive_once(cfg: Config) -> bool:
             with timeit(f"{name} move_to_archivio"):
                 move_to(p, dir_tif_loc)
                 new_path = dir_tif_loc / name
-                # === UPDATE IN-PLACE: ora questo nome esiste nella cartella
-                _dir_cache_add_name(dir_tif_loc, name)
 
             with timeit(f"{name} link/copy_to_PLM"):
                 try:
