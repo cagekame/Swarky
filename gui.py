@@ -161,7 +161,7 @@ class SwarkyApp:
         style = ttk.Style(self.root)
         try: style.theme_use("clam")
         except tk.TclError: pass
-        style.configure(".", font=("Consolas", 11), background=LIGHT_BG, foreground=FG_DARK)
+        style.configure(".", font=("Consolas", 9), background=LIGHT_BG, foreground=FG_DARK)
         style.configure("TFrame", background=LIGHT_BG)
         style.configure("TLabelframe", background=LIGHT_BG, bordercolor=NAVY_BG)
         style.configure("TLabelframe.Label", background=LIGHT_BG, foreground=FG_DARK)
@@ -190,7 +190,9 @@ class SwarkyApp:
         # Plotter list
         self.plotter_list = tk.Listbox(self.plotter_frame, highlightthickness=0, borderwidth=0,
                                        bg="navy", fg="white", selectbackground="#1d4ed8",
-                                       selectforeground="white")
+                                       selectforeground="white",
+                                       font=("Consolas",9)
+                                       )
         self.plotter_list.pack(fill="both", expand=True)
         self.plotter_list.bind("<Double-Button-1>", self._open_selected_plotter)
 
@@ -206,7 +208,7 @@ class SwarkyApp:
             ("data","Data",90),
             ("ora","Ora",70),
             ("file","File",160),
-            ("errore","Errore",150)
+            ("errore","Errore",180)
             ):
             self.anomaly_tree.heading(col, text=head, anchor="w")
             self.anomaly_tree.column(col, width=w, anchor="w", stretch=True)
@@ -227,7 +229,7 @@ class SwarkyApp:
             ("file","File",160),
             ("proc","Processo",160),
             ("dest","Destinazione",150),
-            ("conf","Confronto",160)
+            ("conf","Confronto",180)
             ):
             self.processed_tree.heading(col, text=head, anchor="w")
             self.processed_tree.column(col, width=w, anchor="w", stretch=True)
@@ -240,7 +242,7 @@ class SwarkyApp:
         self.root.grid_columnconfigure(1, minsize=min_anom, weight=1)
         min_proc = sum(self.processed_tree.column(c,'width') for c in ("data","ora","file","proc","dest","conf")) + 16
         self.root.grid_columnconfigure(2, minsize=min_proc, weight=1)
-        plotter_min = tkfont.nametofont("TkDefaultFont").measure("M"*15)
+        plotter_min = tkfont.nametofont("TkDefaultFont").measure("M"*25)
         self.root.grid_columnconfigure(0, minsize=plotter_min, weight=1)
         self.root.minsize(plotter_min + min_anom + min_proc + 48, 480)
 
