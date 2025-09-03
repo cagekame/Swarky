@@ -155,13 +155,13 @@ class SwarkyApp:
     def _setup_theme(self) -> None:
         for fname in ("TkDefaultFont","TkTextFont","TkMenuFont","TkHeadingFont"):
             try:
-                tkfont.nametofont(fname).configure(family="Calibri")
+                tkfont.nametofont(fname).configure(family="Consolas")
             except tk.TclError:
                 pass
         style = ttk.Style(self.root)
         try: style.theme_use("clam")
         except tk.TclError: pass
-        style.configure(".", font=("Calibri", 11), background=LIGHT_BG, foreground=FG_DARK)
+        style.configure(".", font=("Consolas", 11), background=LIGHT_BG, foreground=FG_DARK)
         style.configure("TFrame", background=LIGHT_BG)
         style.configure("TLabelframe", background=LIGHT_BG, bordercolor=NAVY_BG)
         style.configure("TLabelframe.Label", background=LIGHT_BG, foreground=FG_DARK)
