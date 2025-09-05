@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import sys, re, time, shutil, logging, json, os
+import sys, re, time, shutil, logging, json, os, subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -60,8 +60,8 @@ class Config:
 BASE_NAME = re.compile(r"D(\w)(\w)(\d{6})R(\d{2})S(\d{2})(\w)\.(tif|pdf)$", re.IGNORECASE)
 ISS_BASENAME = re.compile(r"G(\d{4})([A-Za-z0-9]{4})([A-Za-z0-9]{6})ISSR(\d{2})S(\d{2})\.pdf$", re.IGNORECASE)
 
-# ---- PREFISSO DOCNO: LISTA NOMI SENZA ENUM COMPLETA (WinAPI) -------------------------
-# Risoluzione wildcard lato server con FindFirstFileW (nessuna installazione)
+# ---- PREFISSO DOCNO: LISTA NOMI SENZA ENUM COMPLETA -------------------------
+
 import ctypes, ctypes.wintypes as wt
 
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
@@ -160,20 +160,66 @@ def setup_logging(cfg: Config):
 
 # ---- FS UTILS ------------------------------------------------------------------------
 
+def _robocopy_ok(rc: int) -> bool:
+    # Robocopy: 0..7 = successi/avvisi; >=8 = errori
+    return rc < 8
+
+def _robocopy_file(src: Path, dst_dir: Path, *, move: bool = False) -> None:
+    """
+    Copia/sposta un singolo file (stesso nome) in dst_dir con Robocopy.
+    /COPY:D (solo dati), /IS (includi 'same'), /R:1 /W:1 (snello),
+    /NFL /NDL /NP (output asciutto), /MOV se move=True.
+    """
+    src = Path(src)
+    dst_dir = Path(dst_dir)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "robocopy",
+        str(src.parent),
+        str(dst_dir),
+        src.name,
+        "/COPY:D",
+        "/IS",
+        "/R:1", "/W:1",
+        "/NFL", "/NDL", "/NP",
+    ]
+    if move:
+        cmd.append("/MOV")
+    # NON usare text=True: l'output di robocopy è in code page OEM, evita decode qui
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=False)
+    if not _robocopy_ok(res.returncode):
+        # Decodifica 'safe' per log/errore senza crash (latin-1 accetta tutti i byte 0-255)
+        out = ""
+        try:
+            out = res.stdout.decode("latin-1", "replace")
+        except Exception:
+            pass
+        raise RuntimeError(f"ROBOCOPY failed ({res.returncode}) for {src} -> {dst_dir}: {out}")
+
 def _fast_copy_or_link(src: Path, dst: Path):
-    """hardlink se possibile, fallback a copy2"""
+    """Prova hardlink, altrimenti copia SOLO i dati (niente metadati)."""
     try:
-        os.link(src, dst)
+        os.link(src, dst)              # istantaneo se stesso volume/share
     except OSError:
-        shutil.copy2(src, dst)
+        # Volumi diversi / share → usa Robocopy (dir→dir con filtro file)
+        _robocopy_file(src, Path(dst).parent, move=False)
 
 def copy_to(src: Path, dst_dir: Path):
     dst_dir.mkdir(parents=True, exist_ok=True)
     _fast_copy_or_link(src, dst_dir / src.name)
 
 def move_to(src: Path, dst_dir: Path):
+    """
+    Sposta con rename atomico se possibile; se fallisce (volumi diversi),
+    usa Robocopy (copia + delete della sorgente).
+    """
     dst_dir.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(src), str(dst_dir / src.name))
+    dst = dst_dir / src.name
+    try:
+        os.replace(src, dst)           # veloce sullo stesso volume/share
+    except OSError:
+        # Volumi diversi / rete → sposta con Robocopy (copia+delete)
+        _robocopy_file(src, dst_dir, move=True)
 
 def write_lines(p: Path, lines: List[str]):
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -308,7 +354,7 @@ def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
     line = f"{file_name} # {err} # {archive_dwg}"
     logging.error(line, extra={"ui": ("anomaly", file_name, err)})
 
-# ---- EDI WRITER (UNICO) --------------------------------------------------------------
+# ---- EDI WRITER --------------------------------------------------------------
 
 def _edi_body(
     *,
@@ -400,6 +446,19 @@ def write_edi(
         file_name=file_name, file_type=file_type,
     )
     write_lines(edi, body)
+
+# ---- STORICO: routing in sottocartelle DA/DB/DC/DD/DE/... ----------------------------
+
+def _storico_dest_dir_for_name(cfg: Config, nm: str) -> Path:
+    """
+    Ritorna la cartella dello Storico corretta in base al prefisso (D + lettera formato):
+      es. DA?123456... -> <ARCHIVIO_STORICO>/DA
+          DC?123456... -> <ARCHIVIO_STORICO>/DC
+    """
+    mm = BASE_NAME.fullmatch(nm)
+    if not mm:
+        return cfg.ARCHIVIO_STORICO / "unknown"
+    return cfg.ARCHIVIO_STORICO / f"D{mm.group(1).upper()}"
 
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
@@ -498,14 +557,27 @@ def archive_once(cfg: Config) -> bool:
                     move_to(p, cfg.ERROR_DIR)
                     continue
                 elif int(new_rev) > int(max_rev_same_sheet):
-                    # Sposta in storico tutte le rev < new_rev per lo stesso sheet (usando SOLO la lista già ottenuta)
+                    # Sposta in Storico (DA/DB/DC/…) tutte le rev < new_rev, con noclobber
                     with timeit(f"{name} move_old_revs_same_sheet"):
                         for r, nm, _, _ in same_sheet:
                             if int(r) < int(new_rev):
                                 old_path = dir_tif_loc / nm
-                                if old_path.exists():
-                                    move_to(old_path, cfg.ARCHIVIO_STORICO)
-                                    log_swarky(cfg, name, tiflog, "Rev superata", nm, dest="Storico")
+                                if not old_path.exists():
+                                    continue
+
+                                dest_dir  = _storico_dest_dir_for_name(cfg, nm)  # es. .../DA
+                                dest_path = dest_dir / nm
+
+                                try:
+                                    if dest_path.exists():
+                                        # già presente in Storico → non sovrascrivere
+                                        log_error(cfg, nm, "Presente in Storico")
+                                        move_to(old_path, cfg.ERROR_DIR)  # sposto la copia attuale in Rivedere
+                                    else:
+                                        move_to(old_path, dest_dir)  # rename/copyfile a seconda del volume
+                                        log_swarky(cfg, name, tiflog, "Rev superata", nm, "Storico")
+                                except Exception as e:
+                                    logging.exception("Storico: impossibile spostare %s → %s: %s", old_path, dest_dir, e)
                 else:
                     # stessa rev & sheet -> metrica diversa?
                     other = next((nm for _, nm, met, _ in same_rs if met != new_metric), None)
@@ -546,7 +618,6 @@ def archive_once(cfg: Config) -> bool:
         elapsed = time.time() - start
         write_lines((cfg.LOG_DIR or cfg.DIR_HPLOTTER) / f"Swarky_{datetime.now().strftime('%b.%Y')}.log",
                     [f"ProcessTime # {elapsed:.2f}s"])
-        logging.info("TIMER %-40s %8.1f ms", "TOTAL archive_once", elapsed * 1000.0)
     return did_something
 
 # ---- ISS / FIV ----------------------------------------------------------------------
