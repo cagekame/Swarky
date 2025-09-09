@@ -55,27 +55,26 @@ class PariRevWindow(tk.Toplevel):
         self.lst_srfolder.grid(row=1, column=0, sticky="nsew")
         self.lst_srfolder.bind("<Double-Button-1>", self._open_selected)
 
-        # ----- colonna destra (pulsanti spinti in basso) -----
+        # ----- colonna destra -----
         right = ttk.Frame(self, padding=PAD)
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=1)  # spacer centrale per spingere i pulsanti giù
+        right.rowconfigure(1, weight=1)  # i pulsanti si espandono verticalmente
 
         ttk.Label(right, text="Azioni").grid(row=0, column=0, sticky="w", pady=LABEL_PAD)
 
-        # spacer centrale che si espande
-        ttk.Frame(right).grid(row=1, column=0, sticky="nsew")
-
-        # blocco pulsanti agganciato al fondo
+        # blocco pulsanti che riempie la colonna destra
         btns = ttk.Frame(right)
-        btns.grid(row=2, column=0, sticky="sew")  # sud-est-ovest = in basso e a tutta larghezza
+        btns.grid(row=1, column=0, sticky="nsew")
 
         self.btn_sr_go     = ttk.Button(btns, text="Start Process",  width=23, command=self._start_process_worker)
         self.btn_getnumber = ttk.Button(btns, text="Get Number",     width=23, command=self._not_implemented)
         self.btn_goto      = ttk.Button(btns, text="GoTo Folder",    width=23, command=self._goto_dest_folder)
         self.btn_srdir     = ttk.Button(btns, text="Goto Sr Folder", width=23, command=self._goto_sr_folder)
-        for b in (self.btn_sr_go, self.btn_getnumber, self.btn_goto, self.btn_srdir):
-            b.pack(fill="x", pady=3)
+        buttons = (self.btn_sr_go, self.btn_getnumber, self.btn_goto, self.btn_srdir)
+        for i, b in enumerate(buttons):
+            pady = (0,3) if i == 0 else (3,0) if i == len(buttons)-1 else 3
+            b.pack(fill="x", expand=True, pady=pady)
 
         # ----- LOG sotto a tutta larghezza -----
         logf = ttk.Frame(self, padding=(8,0,8,8))
