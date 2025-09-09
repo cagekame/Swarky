@@ -32,10 +32,10 @@ class PariRevWindow(tk.Toplevel):
         except tk.TclError: pass
         style.configure(".", background=LIGHT_BG)
 
-        # ===== griglia finestra: 2 colonne sopra + LOG sotto =====
+        # ===== griglia finestra: 2 colonne sopra + info + LOG sotto =====
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
-        self.rowconfigure(1, weight=1)  # il LOG si espande
+        self.rowconfigure(2, weight=1)  # il LOG si espande
 
         PAD = (8,8,8,8)
         LABEL_PAD = (0,4)
@@ -55,7 +55,7 @@ class PariRevWindow(tk.Toplevel):
         )
         self.lst_srfolder.grid(row=1, column=0, sticky="nsew")
         self.lst_srfolder.bind("<Double-Button-1>", self._open_selected)
-        self.lst_srfolder.bind("<<ListboxSelect>>", self._copy_docno_prefix)
+        self.lst_srfolder.bind("<<ListboxSelect>>", self._on_select)
 
         # ----- colonna destra -----
         right = ttk.Frame(self, padding=PAD)
@@ -78,9 +78,15 @@ class PariRevWindow(tk.Toplevel):
             pady = (0,3) if i == 0 else (3,0) if i == len(buttons)-1 else 3
             b.pack(fill="x", expand=True, pady=pady)
 
+        # ----- info dimensione disegno -----
+        self._size_var = tk.StringVar(value="Drawing size (Kilobyte): 0")
+        ttk.Label(self, textvariable=self._size_var).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(0,8)
+        )
+
         # ----- LOG sotto a tutta larghezza -----
         logf = ttk.Frame(self, padding=(8,0,8,8))
-        logf.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        logf.grid(row=2, column=0, columnspan=2, sticky="nsew")
         logf.columnconfigure(0, weight=1)
         logf.rowconfigure(1, weight=1)
         ttk.Label(logf, text="LOG").grid(row=0, column=0, sticky="w", pady=(0,4))
@@ -140,6 +146,8 @@ class PariRevWindow(tk.Toplevel):
             lb.selection_set(idx)
             lb.see(idx)
 
+        self._update_size_label()
+
     # -------- utils/log --------
     def _log(self, msg: str) -> None:
         self.lst_log.insert(tk.END, msg)
@@ -147,6 +155,23 @@ class PariRevWindow(tk.Toplevel):
 
     def _pretty_loc(self, loc: dict) -> str:
         return f"{loc.get('log_name','?')} / {loc.get('arch_tif_loc','?')}"
+
+    def _update_size_label(self) -> None:
+        sel = self.lst_srfolder.curselection()
+        if not sel:
+            self._size_var.set("Drawing size (Kilobyte): 0")
+            return
+        name = self.lst_srfolder.get(sel[0])
+        p = Path(self.cfg.PARI_REV_DIR) / name
+        try:
+            size_kb = int(p.stat().st_size / 1024)
+        except Exception:
+            size_kb = 0
+        self._size_var.set(f"Drawing size (Kilobyte): {size_kb}")
+
+    def _on_select(self, _evt=None) -> None:
+        self._copy_docno_prefix()
+        self._update_size_label()
 
     # -------- azioni --------
     def _open_selected(self, _evt=None) -> None:
