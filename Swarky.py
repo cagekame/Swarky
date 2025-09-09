@@ -615,9 +615,7 @@ def archive_once(cfg: Config) -> bool:
                         for r, nm, _, _ in same_sheet:
                             if int(r) < int(new_rev):
                                 old_path = dir_tif_loc / nm
-                                if not old_path.exists():
-                                    continue
-
+                                # EAFP: evita round-trip SMB (exists/stat) e riduce la latenza su rete
                                 dest_dir  = _storico_dest_dir_for_name(cfg, nm)  # es. .../DA
                                 dest_path = dest_dir / nm
 
@@ -625,10 +623,20 @@ def archive_once(cfg: Config) -> bool:
                                     if dest_path.exists():
                                         # già presente in Storico → non sovrascrivere
                                         log_error(cfg, nm, "Presente in Storico")
-                                        move_to(old_path, cfg.ERROR_DIR)  # sposto la copia attuale in Rivedere
+                                        try:
+                                            move_to(old_path, cfg.ERROR_DIR)  # sposto la copia attuale in Rivedere
+                                        except FileNotFoundError:
+                                            pass
+                                        except Exception as e:
+                                            logging.exception("Storico: impossibile spostare %s → %s: %s", old_path, cfg.ERROR_DIR, e)
                                     else:
-                                        move_to(old_path, dest_dir)  # rename/copyfile a seconda del volume
-                                        log_swarky(cfg, name, tiflog, "Rev superata", nm, "Storico")
+                                        try:
+                                            move_to(old_path, dest_dir)  # rename/copyfile a seconda del volume
+                                            log_swarky(cfg, name, tiflog, "Rev superata", nm, "Storico")
+                                        except FileNotFoundError:
+                                            pass
+                                        except Exception as e:
+                                            logging.exception("Storico: impossibile spostare %s → %s: %s", old_path, dest_dir, e)
                                 except Exception as e:
                                     logging.exception("Storico: impossibile spostare %s → %s: %s", old_path, dest_dir, e)
                 else:
