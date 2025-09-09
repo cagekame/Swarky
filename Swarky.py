@@ -21,8 +21,7 @@ class Config:
     DIR_ISS: Path
     DIR_FIV_LOADING: Path
     DIR_HENGELO: Path
-    DIR_KALT: Path
-    DIR_KALT_ERRORS: Path
+    DIR_PLM_ERROR: Path
     DIR_TABELLARI: Path
     LOG_DIR: Optional[Path] = None
     LOG_LEVEL: int = logging.INFO
@@ -47,8 +46,7 @@ class Config:
             DIR_ISS=P("iss"),
             DIR_FIV_LOADING=P("fiv"),
             DIR_HENGELO=P("heng"),
-            DIR_KALT=P("kalt"),
-            DIR_KALT_ERRORS=P("kalt_err"),
+            DIR_PLM_ERROR=P("error_plm"),
             DIR_TABELLARI=P("tab"),
             LOG_DIR=Path(log_dir) if log_dir else None,
             LOG_LEVEL=logging.INFO,
@@ -678,12 +676,11 @@ def count_tif_files(cfg: Config) -> dict:
         except Exception:
             return 0
     return {
-        "KALT Error": count(cfg.DIR_KALT_ERRORS, "*.err"),
         "Same Rev Dwg": count(cfg.PARI_REV_DIR, "*.tif", "*.pdf"),
         "Check Dwg": count(cfg.ERROR_DIR, "*.tif", "*.pdf"),
         "Heng Dwg": count(cfg.DIR_HENGELO, "*.tif", "*.pdf"),
         "Tab Dwg": count(cfg.DIR_TABELLARI, "*.tif", "*.pdf"),
-        "Kal Dwg": count(cfg.DIR_KALT, "*.tif", "*.pdf"),
+        "Plm error Dwg": count(cfg.DIR_PLM_ERROR, "*.tif", "*.pdf"),
     }
 
 # ---- LOOP ----------------------------------------------------------------------------
