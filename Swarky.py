@@ -803,18 +803,45 @@ def fiv_loading(cfg: Config):
 
 # ---- STATS --------------------------------------------------------------------------
 
+_LAST_STATS_TS: float = 0.0
+
+def _count_files_quick(d: Path, exts: tuple[str, ...]) -> int:
+    """Conta i file con estensione in exts usando os.scandir, non ricorsivo, case-insensitive. Tollerante agli errori."""
+    try:
+        with os.scandir(d) as it:
+            return sum(
+                1
+                for de in it
+                if de.is_file() and os.path.splitext(de.name)[1].lower() in exts
+            )
+    except (OSError, FileNotFoundError):
+        return 0
+
+def _stats_interval_sec() -> int:
+    """Legge l'intervallo da SWARKY_STATS_EVERY (secondi), default 300, valore minimo 10."""
+    val = os.environ.get("SWARKY_STATS_EVERY", "300")
+    try:
+        n = int(val)
+    except Exception:
+        n = 300
+    return n if n >= 10 else 10
+
+def _should_emit_stats() -> bool:
+    """Ritorna True se è passato abbastanza tempo dall'ultima emissione; aggiorna _LAST_STATS_TS quando True."""
+    global _LAST_STATS_TS
+    now = time.monotonic()
+    if now - _LAST_STATS_TS >= _stats_interval_sec():
+        _LAST_STATS_TS = now
+        return True
+    return False
+
 def count_tif_files(cfg: Config) -> dict:
-    def count(d: Path, *patterns: str) -> int:
-        try:
-            return sum(len(list(d.glob(pat))) for pat in patterns)
-        except Exception:
-            return 0
     return {
-        "Same Rev Dwg": count(cfg.PARI_REV_DIR, "*.tif", "*.pdf"),
-        "Check Dwg": count(cfg.ERROR_DIR, "*.tif", "*.pdf"),
-        "Heng Dwg": count(cfg.DIR_HENGELO, "*.tif", "*.pdf"),
-        "Tab Dwg": count(cfg.DIR_TABELLARI, "*.tif", "*.pdf"),
-        "Plm error Dwg": count(cfg.DIR_PLM_ERROR, "*.tif", "*.pdf"),
+        "Same Rev Dwg": _count_files_quick(cfg.PARI_REV_DIR, (".tif", ".pdf")),
+        "Check Dwg": _count_files_quick(cfg.ERROR_DIR, (".tif", ".pdf")),
+        "Heng Dwg": _count_files_quick(cfg.DIR_HENGELO, (".tif", ".pdf")),
+        "Tab Dwg": _count_files_quick(cfg.DIR_TABELLARI, (".tif", ".pdf")),
+        "Plm error Dwg": _count_files_quick(cfg.DIR_PLM_ERROR, (".tif", ".pdf")),
     }
 
 # ---- LOOP ----------------------------------------------------------------------------
@@ -823,7 +850,8 @@ def run_once(cfg: Config) -> bool:
     did_something = archive_once(cfg)
     iss_loading(cfg)
     fiv_loading(cfg)
-    logging.debug("Counts: %s", count_tif_files(cfg))
+    if logging.getLogger().isEnabledFor(logging.DEBUG) and _should_emit_stats():
+        logging.debug("Counts: %s", count_tif_files(cfg))
     return did_something
 
 def watch_loop(cfg: Config, interval: int):
