@@ -1,19 +1,18 @@
-# Swarky — Regole di Archiviazione (per Sheet)
+# Swarky — Regole di Archiviazione (per Sheet) · Nuova logica
 
-Questo documento definisce la **logica di archiviazione** dei disegni gestiti da Swarky.  
-La logica è **per sheet**: tutte le decisioni (confronto revisioni, coesistenza delle metriche, cambio regime) avvengono **all’interno dello stesso foglio `Syy`** per un determinato *document number* (Prefix).
+La logica di archiviazione opera **per sheet**: tutte le decisioni (confronto revisioni, coesistenza delle metriche, storicizzazione) avvengono **all’interno dello stesso foglio `Syy`** per un determinato *document number* (Prefix).
 
 ---
 
 ## Nomenclatura
 
-- **Prefix**: `D<size><loc><num>` — identifica il disegno (document number).  
-  Esempio: `DCM728093`
-- **R**: revisione (`Rxx`), esempio `R14`
-- **S**: sheet (`Syy`), esempio `S01`
-- **UOM**: metrica in `{ M, I, D, N }`
+- **Prefix**: `D<size><loc><num>` — identifica il disegno (document number), es. `DCM728093`
+- **R**: revisione (`Rxx`), es. `R14`
+- **S**: sheet (`Syy`), es. `S01`
+- **UOM**: metrica `{ M, I, D, N }`
+- **Gruppi**: **MI** = `{M, I}` · **DN** = `{D, N}`
 
-Il nome completo è:  
+**Nome file completo**  
 `D<size><loc><num>R<xx>S<yy><UOM>.(tif|pdf)`
 
 ---
@@ -21,117 +20,111 @@ Il nome completo è:
 ## Principi chiave
 
 1. **Ambito per sheet**  
-   Per ogni coppia **(Prefix, Sheet)** può esistere **una sola revisione attiva** alla volta.
+   Lo *scope* è **(Prefix, Sheet)**. Gli altri sheet (`Szz ≠ Syy`) sono **indipendenti**.
 
-2. **Regimi di coesistenza alla stessa revisione (per quello sheet)**  
-   - **MI** → possono coesistere `M` e `I` (anche sullo stesso foglio).  
-   - **D-only** → soltanto `D`.  
-   - **N-only** → soltanto `N`.
+2. **Coesistenza M/I anche con revisioni diverse**  
+   In **MI**, `M` e `I` **coesistono sullo stesso sheet anche se hanno revisioni diverse**.  
+   ➜ **Una revisione nuova di `I` non storicizza `M`**, e viceversa.  
+   ➜ Si storicizzano **solo** le revisioni **più vecchie della *stessa metrica*** su quello sheet.
 
-3. **Cambio di regime solo con incremento revisione**  
-   A **parità di revisione** non si cambia regime.  
-   Se **R cresce**, è consentito cambiare regime.
+3. **DN esclusivo per revisione**  
+   In **DN**, `D` e `N` **non coesistono alla stessa revisione** e **non coesistono con MI alla stessa revisione**.  
+   Il cambio regime (p.es. da MI a DN o viceversa) è **consentito solo con incremento di revisione**, ma senza toccare l’altra metrica MI: ogni metrica MI segue il suo filo revisionale.
+
+4. **Storicizzazione mirata**  
+   Quando arriva `Rnew` su `(Prefix, Sheet, Metrica)`:
+   - sposta in **ARCHIVIO_STORICO** **solo** i file **della *stessa metrica*** con revisione `< Rnew` e **stesso sheet**;
+   - **mai** toccare file di **altra metrica** (M vs I) né di **altri sheet**.
 
 ---
 
-## Flusso decisionale
+## Controlli formali (sempre prima)
 
-### 0) Controlli formali (sempre prima)
 - Nome non conforme alla regex  
 - Formato non in `A..E`  
 - Location non in `M,K,F,T,E,S,N,P`  
 - UOM non in `M/I/D/N`  
-- TIFF con orientamento non valido  
+- TIFF con orientamento non valido
 
 ➡️ **ERROR_DIR** (log specifico)
 
 ---
 
-### 1) Individuazione dello scope
-Dato un file in ingresso `D…RxxSyy{UOM}`, cerca **solo** in archivio i file con lo **stesso `Prefix` e lo stesso `Syy`**.  
-Gli altri sheet (`Szz ≠ Syy`) sono **indipendenti**.
+## Ricerca dell’ambito
+
+Dato un file `D…RxxSyy{UOM}` in ingresso, considera **solo** i file in archivio con **stesso `Prefix` e stesso `Syy`**.  
+Gli altri sheet sono irrilevanti per la decisione.
 
 ---
 
-### 2) Confronto revisioni (per quello sheet)
+## Confronto revisioni (per quello sheet e metrica)
 
-- Se esiste una revisione attiva `Rold ≠ Rnew`:
-  - **`Rnew > Rold`** → sposta **tutti** i file `Rold` *di quello sheet* (qualunque UOM) in **ARCHIVIO_STORICO**; poi **accetta `Rnew`** e **imposta il regime** in base al suo UOM.  
-    > Così, se arriva prima `R14I` e poi `R14M`, `R13*` di quello sheet è già stata rimossa e `R14M` può coesistere con `R14I` (regime **MI**).
-  - **`Rnew < Rold`** → **ERROR_DIR** (log: *“Revisione Precedente”*).
-- Se non esiste `Rold` per quello sheet → vai a **3**.
+- **Nessuna revisione presente per quello sheet** → si passa alla gestione di regime (archiviazione).
+- **Esiste `Rold`**:
+  - `Rnew < Rold` → **ERROR_DIR** (log: *Revisione Precedente*).
+  - `Rnew = Rold` → si applicano le regole di **coesistenza alla stessa R** (vedi tabella).
+  - `Rnew > Rold` → **storicizza solo le revisioni più vecchie della *stessa metrica*** per quello sheet, poi archivia `Rnew`.
 
----
-
-### 3) Regime alla **stessa revisione** (per quello sheet)
-
-- **Primo file alla revisione `Rnew` (per quello sheet)**:
-  - UOM = `M` o `I` → regime = **MI** → **ARCHIVIA**
-  - UOM = `D` → regime = **D-only** → **ARCHIVIA**
-  - UOM = `N` → regime = **N-only** → **ARCHIVIA**
-
-- **Altri file alla stessa `Rnew` (per quello sheet)**:
-  - **Regime = MI**
-    - Arriva `M` o `I`:
-      - Se esiste già **stesso `R+S+UOM`** → **PARI_REV_DIR** (pari revisione)
-      - Se è l’**altra metrica** (M↔I) → **ARCHIVIA** (coesistono)
-    - Arriva `D` o `N` → **PARI_REV_DIR** (cambio regime non ammesso a parità di R)
-  - **Regime = D-only**
-    - Arriva `D`:
-      - Se esiste già **stesso `R+S+UOM`** → **PARI_REV_DIR**
-      - Altrimenti → **ARCHIVIA**
-    - Arriva `M`, `I` o `N` → **PARI_REV_DIR** (cambio regime non ammesso)
-  - **Regime = N-only**
-    - Arriva `N`:
-      - Se esiste già **stesso `R+S+UOM`** → **PARI_REV_DIR**
-      - Altrimenti → **ARCHIVIA**
-    - Arriva `M`, `I` o `D` → **PARI_REV_DIR** (cambio regime non ammesso)
-
-> **Cambio regime con incremento revisione**  
-> Se a `Rold` lo sheet era `D-only`/`N-only` e **arriva `Rnew > Rold`** con `M`/`I`, si manda in **Storico** **tutta** la `Rold` (D/N) e si **archivia `M/I`** (regime → **MI**).  
-> Viceversa, se `Rnew > Rold` è `D` o `N` e `Rold` era **MI**, si manda in **Storico** tutta la `Rold` (M/I) e si **archivia `D/N`** (regime → **D-only/N-only**).
+> 🔎 **Esempio MI**  
+> Archivio: `R04S01M`, `R04S01I`. Arriva `R05S01I`.  
+> Storicizza **solo** `R04S01I`. **Non** tocca `R04S01M`.  
+> Quando arriverà `R05S01M`, verrà storicizzato `R04S01M`.
 
 ---
 
-## Matrice UOM vs Regime (stessa `R` e stesso `S`)
+## Regole alla **stessa revisione** (stesso `R` e stesso `S`)
 
 Azione sul **nuovo file**:
 
-- **OK** = archivia (`PLM + dir_tif_loc + EDI`)  
-- **PR** = **PARI_REV_DIR** (duplicato o cambio regime non ammesso alla stessa R)
+- **OK** = archivia (`PLM + dir_tif_loc + EDI`)
+- **PR** = **PARI_REV_DIR** (duplicato `R+S+UOM` o cambio regime non ammesso alla stessa R)
 
-| UOM      | Regime **MI** (M/I) | Regime **D-only** | Regime **N-only** |
-|----------|----------------------|-------------------|-------------------|
-| **M**    | OK\*                 | PR                | PR                |
-| **I**    | OK\*                 | PR                | PR                |
-| **D**    | PR                   | OK\*\*            | PR                |
-| **N**    | PR                   | PR                | OK\*\*            |
+| UOM      | Regime **MI** (M/I)                        | Regime **D-only**            | Regime **N-only**            |
+|----------|--------------------------------------------|------------------------------|------------------------------|
+| **M**    | **OK*** (coesiste con I)                   | **PR** (regime non MI)       | **PR** (regime non MI)       |
+| **I**    | **OK*** (coesiste con M)                   | **PR** (regime non MI)       | **PR** (regime non MI)       |
+| **D**    | **PR** (cambio regime non ammesso a pari R)| **OK****                     | **PR** (regime non D-only)   |
+| **N**    | **PR** (cambio regime non ammesso a pari R)| **PR** (regime non N-only)   | **OK****                     |
 
-\* **MI**: se esiste già lo **stesso `R+S+UOM`** → **PR**; se è l’**altra metrica** (M↔I) → **OK**.  
+\* **MI**: se esiste già lo **stesso `R+S+UOM`** → **PR**; se è l’**altra metrica** (M↔I) → **OK** (coesistono).  
 \*\* **D-only/N-only**: se esiste già lo **stesso `R+S+UOM`** → **PR**; altrimenti → **OK**.
+
+---
+
+## Storicizzazione — riepilogo
+
+- **Target selettivo**: **stessa metrica & stesso sheet** con `rev < Rnew`.
+- **Mai** storicizzare:
+  - file di **altra metrica M/I** quando arriva la nuova revisione dell’altra (coexist MAINTAINED);
+  - file di **altri sheet**;
+  - file a **stessa revisione** (gestiti come PR/OK da tabella).
 
 ---
 
 ## Esempi
 
-- **E1** — Archivio: `R13S01M` e `R13S01I`; arriva `R14S01I`  
-  `R14 > R13` (stesso `S01`) → **Storico**: `R13S01M` e `R13S01I`; **Archivia** `R14S01I` (regime **MI**).
+- **E1** — Archivio: `R04S01M`, `R04S01I`; arriva `R05S01I`  
+  **Storico**: `R04S01I` (stessa metrica).  
+  **NON** tocca `R04S01M`.  
+  **Archivia** `R05S01I`. (Regime MI)
 
 - **E2** — Archivio: `R01S01M`; arriva `R03S04D`  
-  Sheet diverso (`S04`) → indipendente. Nessuna `Rold` per `S04` → regime = **D-only** → **Archivia** `R03S04D`.
+  Sheet diverso (`S04`) → indipendente.  
+  Nessuna `Rold` per `S04` → regime `D-only` → **Archivia** `R03S04D`.
 
 - **E3** — Archivio: `R01S01M`; arriva `R02S03N`  
-  Sheet diverso (`S03`) → indipendente. Nessuna `Rold` per `S03` → regime = **N-only** → **Archivia** `R02S03N`.
+  Sheet diverso (`S03`) → indipendente.  
+  Nessuna `Rold` per `S03` → regime `N-only` → **Archivia** `R02S03N`.
 
 - **E4** — Archivio: `R14S01D`; arriva `R14S01M`  
-  Stessa `R` e `S`, regime cambierebbe → **PR** (cambio regime **non** ammesso a parità di revisione).
+  Stessa `R` e `S`, cambio regime a pari revisione → **PR**.
 
 ---
 
-## Messaggi di log tipici
+## Messaggi di log
 
-- `… # Rev superata # <vecchio>` — spostato in Storico un file della revisione precedente **per quello sheet**  
-- `… # Metrica Diversa # <altro_R+S>` — in regime **MI**, coesistenza riconosciuta  
+- `… # Rev superata # <vecchio>` — spostato in Storico **uno specifico file della *stessa metrica* e *stesso sheet***  
+- `… # Metrica Diversa # <altro_R+S>` — in regime **MI**, coesistenza M/I riconosciuta  
 - `… # Pari Revisione` — duplicato (`R+S+UOM`) o tentativo di cambio regime a parità di `R`  
 - `… # Archiviato` — accettazione (PLM + archivio + EDI)  
 - `… # Revisione Precedente # <ref>` — arrivato `Rnew < Rold`  
@@ -145,19 +138,18 @@ Azione sul **nuovo file**:
 flowchart TD
   A[Nuovo file D…RxxSyy{UOM}] --> B{Controlli formali OK?}
   B -- No --> X[ERROR_DIR]:::err
-  B -- Sì --> C[Seleziona archivio per stesso Prefix+Syy]
-  C --> D{Esiste Rold per Syy?}
-  D -- No --> E[Definisci regime da UOM (MI/D-only/N-only)\nARCHIVIA]:::ok
-  D -- Sì --> F{Rnew rispetto a Rold}
-  F -- Rnew < Rold --> X[ERROR_DIR: Revisione Precedente]:::err
-  F -- Rnew > Rold --> G[Sposta TUTTI i file Rold di Syy\nin ARCHIVIO_STORICO]:::stor
-  G --> H[Imposta regime da UOM di Rnew\nARCHIVIA]:::ok
-  F -- Rnew = Rold --> I{Regime corrente di Syy}
-  I --> J{UOM compatibile col regime?}
-  J -- No --> PR[PARI_REV_DIR\n(cambio regime non ammesso)]:::pr
-  J -- Sì --> K{Stesso R+S+UOM già presente?}
-  K -- Sì --> PR
-  K -- No --> E2[ARCHIVIA]:::ok
+  B -- Sì --> C[Seleziona archivio con stesso Prefix+Syy]
+  C --> D{Esistono file per Syy?}
+  D -- No --> E[Definisci regime da UOM (MI/D-only/N-only) → ARCHIVIA]:::ok
+  D -- Sì --> F[Valuta revisioni per la STESSA METRICA]
+  F --> G{Rnew < max_rev(metrica,Syy)?}
+  G -- Sì --> X[ERROR_DIR: Revisione Precedente]:::err
+  G -- No --> H{Rnew = max_rev(metrica,Syy)?}
+  H -- Sì --> I{Regole alla stessa R (tabella)}
+  I -- PR --> PR[PARI_REV_DIR]:::pr
+  I -- OK --> E2[ARCHIVIA]:::ok
+  H -- No --> J[Storicizza SOLO rev < Rnew della STESSA METRICA e STESSO SHEET]:::stor
+  J --> E2[ARCHIVIA]:::ok
 
   classDef ok fill:#DCFCE7,stroke:#16A34A,color:#064E3B
   classDef pr fill:#FEF9C3,stroke:#CA8A04,color:#713F12
