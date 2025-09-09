@@ -24,7 +24,7 @@ except Exception:
     Observer = None  # type: ignore
 
 # --- Backend hooks ---
-from Swarky import Config, run_once, setup_logging
+from Swarky import Config, run_once, setup_logging, count_tif_files
 
 # --- Tema ---
 LIGHT_BG = "#eef3f9"
@@ -81,7 +81,7 @@ class SwarkyApp:
         self.start_plotter_watcher()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-
+        
     # ---------------- CONFIG (solo JSON) ----------------
     def _ensure_default_config(self) -> None:
         if self.json_path.exists():
@@ -97,8 +97,7 @@ class SwarkyApp:
                 "iss": "./iss",
                 "fiv": "./FIVloading",
                 "heng": "./Hengelo",
-                "kalt": "./Kalt",
-                "kalt_err": "./Kalt/Kalt_error",
+                "error_plm": "./Plm_error",
                 "tab": "./tabellari",
                 "log_dir": None
             },
@@ -136,8 +135,7 @@ class SwarkyApp:
             DIR_ISS           = _p(paths.get("iss")),
             DIR_FIV_LOADING   = _p(paths.get("fiv")),
             DIR_HENGELO       = _p(paths.get("heng")),
-            DIR_KALT          = _p(paths.get("kalt")),
-            DIR_KALT_ERRORS   = _p(paths.get("kalt_err")),
+            DIR_PLM_ERROR     = _p(paths.get("error_plm")),
             DIR_TABELLARI     = _p(paths.get("tab")),
             LOG_DIR           = _p(paths.get("log_dir")),
             LOG_LEVEL         = logging.INFO if data.get("LOG_LEVEL","INFO")=="INFO" else logging.DEBUG,
@@ -177,12 +175,21 @@ class SwarkyApp:
             self.root.columnconfigure(c, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        self.plotter_frame   = ttk.LabelFrame(self.root, text="Plotter")
+        self.plotter_frame   = ttk.Frame(self.root)
+        self.lbl_plm_errors_var = tk.StringVar(value="N° PLM errors: 0")
+        self.lbl_check_var      = tk.StringVar(value="N° Check Dwgs: 0")
+        self.lbl_same_var       = tk.StringVar(value="N° Same Rev.: 0")
+        self.lbl_drawings_var   = tk.StringVar(value="N° Drawings: 0")
+        ttk.Label(self.plotter_frame, text="Plotter", anchor="w").pack(side="top", fill="x")
+        ttk.Label(self.plotter_frame, textvariable=self.lbl_plm_errors_var, anchor="w").pack(side="bottom", fill="x")
+        ttk.Label(self.plotter_frame, textvariable=self.lbl_check_var,      anchor="w").pack(side="bottom", fill="x")
+        ttk.Label(self.plotter_frame, textvariable=self.lbl_same_var,       anchor="w").pack(side="bottom", fill="x")
+        ttk.Label(self.plotter_frame, textvariable=self.lbl_drawings_var,   anchor="w").pack(side="bottom", fill="x")
+        
         self.anomaly_frame   = ttk.LabelFrame(self.root, text="Anomalie")
         self.processed_frame = ttk.LabelFrame(self.root, text="File processati")
         self.controls        = ttk.Frame(self.root)
-
-        self.plotter_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        self.plotter_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8,50))
         self.anomaly_frame.grid(row=0, column=1, sticky="nsew", padx=8, pady=8)
         self.processed_frame.grid(row=0, column=2, sticky="nsew", padx=8, pady=8)
         self.controls.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0,8))
@@ -194,8 +201,9 @@ class SwarkyApp:
                                        font=("Consolas",9)
                                        )
         self.plotter_list.pack(fill="both", expand=True)
+        
         self.plotter_list.bind("<Double-Button-1>", self._open_selected_plotter)
-
+        
         # Anomalie
         self.anomaly_tree = ttk.Treeview(
         self.anomaly_frame, 
@@ -251,12 +259,13 @@ class SwarkyApp:
         ttk.Label(self.controls, text="Intervallo (s):").pack(side="left")
         ttk.Entry(self.controls, textvariable=self.interval_var, width=6).pack(side="left", padx=(0,8))
         self.btn_swarky = ttk.Button(self.controls, text="Swarky", command=self.run_once_thread)
-        self.btn_swarky.pack(side="left", padx=4)        
+        self.btn_swarky.pack(side="left", padx=(20,4))        
         self.btn_start = ttk.Button(self.controls, text="Avvia watch", command=self.start_watch)
         self.btn_stop  = ttk.Button(self.controls, text="Ferma watch", state="disabled", command=self.stop_watch)
         self.btn_start.pack(side="left", padx=4)
         self.btn_stop.pack(side="left", padx=4)
         ttk.Button(self.controls, text="Pulisci", command=self._clear_tables).pack(side="left", padx=4)
+        ttk.Button(self.controls, text="PariRev", command=self.open_parirev).pack(side="left", padx=4)
         ttk.Button(self.controls, text="Plotter", command=self._open_plotter_folder).pack(side="left", padx=4)
         ttk.Button(self.controls, text="Settings", command=self.open_settings).pack(side="left", padx=4)
 
@@ -273,6 +282,28 @@ class SwarkyApp:
 
     def insert_anomaly(self, data, ora, file, errore) -> None:
         self.anomaly_tree.insert("", "end", values=(data, ora, file, errore))
+        
+    # ---------------- Gestione contatori ----------------        
+   
+    def update_counters(self) -> None:
+        # prende i contatori dal backend
+        try:
+            stats = count_tif_files(self.cfg)
+        except Exception:
+            stats = {}
+
+        # N° Drawings = quanti elementi hai caricato nella listbox
+        drawings = 0
+        try:
+            drawings = self.plotter_list.size()
+        except Exception:
+            pass
+
+        self.lbl_drawings_var.set(f"N° Drawings: {drawings}")
+        self.lbl_same_var.set(f"N° Same Rev.: {stats.get('Same Rev Dwg', 0)}")
+        self.lbl_check_var.set(f"N° Check Dwgs: {stats.get('Check Dwg', 0)}")
+        self.lbl_plm_errors_var.set(f"N° PLM errors: {stats.get('Plm error Dwg', 0)}")
+        
 
     # ---------------- Plotter ----------------
     def refresh_plotter(self) -> None:
@@ -289,6 +320,8 @@ class SwarkyApp:
             files = {}
         for name in sorted(files.values(), key=str.lower):
             self.plotter_list.insert(tk.END, name)
+        
+        self.update_counters()
 
     def _open_selected_plotter(self, _=None) -> None:
         sel = self.plotter_list.curselection()
@@ -297,6 +330,15 @@ class SwarkyApp:
         p = (self.cfg.DIR_HPLOTTER / self.plotter_list.get(sel[0]))
         if p.exists():
             _open_path(p)
+            
+    def _refresh_parirev(self) -> None:
+        """Se la finestra PariRev è aperta, aggiorna la sua listbox."""
+        try:
+            win = getattr(self, "_parirev_win", None)
+            if win and win.winfo_exists():
+                win.refresh_list()
+        except Exception:
+            pass
 
     # ---------------- AUTO_TIME ----------------
     def _read_auto_time_from_file(self) -> Optional[dt_time]:
@@ -313,6 +355,7 @@ class SwarkyApp:
     # ---------------- Timer & clock ----------------
     def periodic_plotter_refresh(self) -> None:
         self.refresh_plotter()
+        self._refresh_parirev()
         self.root.after(10000 if self.plotter_observer else 1000, self.periodic_plotter_refresh)
 
     def update_clock(self) -> None:
@@ -361,7 +404,10 @@ class SwarkyApp:
                 except Exception:
                     pass
             self._run_in_progress = False
-            self.root.after(0, lambda: (self.btn_swarky.state(["!disabled"]), self.refresh_plotter()))
+            self.root.after(0, lambda: (self.btn_swarky.state(["!disabled"]),
+            self.refresh_plotter(),
+            self._refresh_parirev()
+            ))
 
     def _schedule_if_ready(self) -> None:
         if hasattr(self, "_schedule_id") and self._schedule_id is not None:
@@ -392,6 +438,7 @@ class SwarkyApp:
             def _refresh(self, event):
                 if not getattr(event, "is_directory", False):
                     app.root.after(0, app.refresh_plotter)
+                    app.root.after(0, app._refresh_parirev)
             on_created = on_moved = on_deleted = _refresh
         try:
             observer = Observer()
@@ -474,6 +521,20 @@ class SwarkyApp:
 
     def open_settings(self) -> None:
         SettingsDialog(self)
+        
+    def open_parirev(self) -> None:
+        # Evita finestre duplicate
+        try:
+            if getattr(self, "_parirev_win", None) and self._parirev_win.winfo_exists():
+                self._parirev_win.focus_set()
+                return
+        except Exception:
+            pass
+        try:
+            from Gui_Parirev import PariRevWindow
+            self._parirev_win = PariRevWindow(self.root, self.cfg)  # passa la cfg se serve
+        except Exception as e:
+            messagebox.showerror("PariRev", f"Impossibile aprire l'interfaccia PariRev:\n{e}")
 
     # ---------------- Close ----------------
     def _on_close(self) -> None:
@@ -505,8 +566,7 @@ class SettingsDialog(tk.Toplevel):
         ("iss",       "ISS"),
         ("fiv",       "FIV loading"),
         ("heng",      "Hengelo"),
-        ("kalt",      "Kalt"),
-        ("kalt_err",  "Kalt_error"),
+        ("error_plm", "PLM_Error"),
         ("tab",       "Tabellari"),
         ("log_dir",   "Log (opzionale)"),
     ]
