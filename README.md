@@ -1,4 +1,4 @@
-# Swarky — Regole di Archiviazione (per Sheet) · Nuova logica
+# Swarky — Regole di Archiviazione
 
 La logica di archiviazione opera **per sheet**: tutte le decisioni (confronto revisioni, coesistenza delle metriche, storicizzazione) avvengono **all’interno dello stesso foglio `Syy`** per un determinato *document number* (Prefix).
 
