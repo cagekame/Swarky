@@ -202,8 +202,9 @@ _DOC_LOCKS: Dict[tuple[str, str], threading.Lock] = {}
 _DOC_LOCKS_MASTER = threading.Lock()
 
 def _doc_key(dir_tif_loc: Path, m: re.Match) -> tuple[str, str]:
-    # usa path assoluto/normalized e il document number D.. (senza R/S)
-    return (str(dir_tif_loc.resolve()).lower(), f"D{m.group(1)}{m.group(2)}{m.group(3)}")
+    # usa path normalizzato senza accesso I/O e il document number D.. (senza R/S)
+    base = os.path.normcase(os.fspath(dir_tif_loc))
+    return (base, f"D{m.group(1)}{m.group(2)}{m.group(3)}")
 
 def _get_doc_lock(dir_tif_loc: Path, m: re.Match) -> threading.Lock:
     key = _doc_key(dir_tif_loc, m)
@@ -256,6 +257,7 @@ def _robocopy_file(src: Path, dst_dir: Path, *, move: bool = False) -> None:
         mt = int(mt_env)
     except ValueError:
         mt = 16
+    mt = max(1, min(mt, 128))
     cmd = [
         "robocopy",
         str(src.parent),
@@ -297,12 +299,12 @@ def _fast_copy_or_link(src: Path, dst: Path):
         os.link(src, dst)              # istantaneo se stesso volume/share
     except OSError:
         # Volumi diversi / share → usa Robocopy (dir→dir con filtro file)
-        dest_path = Path(dst).parent / Path(src).name
+        dest_path = Path(dst)
         if _is_same_file(src, dest_path):
             # Pre-check: se il file di destinazione è già identico, evita robocopy.
             # Solo per copia: negli spostamenti servono comunque le delete.
             return
-        _robocopy_file(src, Path(dst).parent, move=False)
+        _robocopy_file(src, dest_path.parent, move=False)
 
 def copy_to(src: Path, dst_dir: Path):
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -627,12 +629,6 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
             tiflog = loc["log_name"]
 
         with timeit(f"{name} accept"):
-            with timeit(f"{name} orientamento"):
-                if not check_orientation_ok(p):
-                    log_error(cfg, name, "Immagine Girata")
-                    move_to(p, cfg.ERROR_DIR)
-                    return True
-
             lock = _get_doc_lock(dir_tif_loc, m)
             with lock:
                 with timeit(f"{name} check_same_filename (exists-fast)"):
@@ -700,6 +696,12 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
                             if other:
                                 log_swarky(cfg, name, tiflog, "Metrica Diversa", other)
 
+                with timeit(f"{name} orientamento"):
+                    if not check_orientation_ok(p):
+                        log_error(cfg, name, "Immagine Girata")
+                        move_to(p, cfg.ERROR_DIR)
+                        return True
+
                 with timeit(f"{name} move_to_archivio"):
                     move_to(p, dir_tif_loc)
                     new_path = dir_tif_loc / name
@@ -737,6 +739,7 @@ def archive_once(cfg: Config) -> bool:
     except ValueError:
         workers = 3
     workers = max(1, min(workers, 8))
+    logging.debug("Workers: %d", workers)
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_process_candidate, p, cfg) for p in candidates]
