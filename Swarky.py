@@ -225,22 +225,31 @@ def _robocopy_ok(rc: int) -> bool:
 def _robocopy_file(src: Path, dst_dir: Path, *, move: bool = False) -> None:
     """
     Copia/sposta un singolo file (stesso nome) in dst_dir con Robocopy.
-    /COPY:D (solo dati), /IS (includi 'same'), /R:1 /W:1 (snello),
-    /NFL /NDL /NP (output asciutto), /MOV se move=True.
+    /COPY:D (solo dati), /R:1 /W:1 (snello),
+    /NFL /NDL /NP (output asciutto), /MT, /J solo per file grandi, /MOV se move=True.
+    Robocopy salta i file già identici di default, quindi niente /IS.
     """
     src = Path(src)
     dst_dir = Path(dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
+    size = os.stat(src).st_size
+    mt_env = os.environ.get("SWARKY_ROBOCOPY_MT", "16")
+    try:
+        mt = int(mt_env)
+    except ValueError:
+        mt = 16
     cmd = [
         "robocopy",
         str(src.parent),
         str(dst_dir),
         src.name,
-        "/COPY:D",
-        "/IS",
+        "/COPY:D",  # solo dati; niente /IS: robocopy salta i file 'same'
         "/R:1", "/W:1",
         "/NFL", "/NDL", "/NP",
+        f"/MT:{mt}",  # /MT accelera i file grandi
     ]
+    if size >= 32 * 1024 * 1024:
+        cmd.append("/J")  # /J è utile solo su file grandi (I/O non bufferizzato)
     if move:
         cmd.append("/MOV")
     # NON usare text=True: l'output di robocopy è in code page OEM, evita decode qui
@@ -254,12 +263,27 @@ def _robocopy_file(src: Path, dst_dir: Path, *, move: bool = False) -> None:
             pass
         raise RuntimeError(f"ROBOCOPY failed ({res.returncode}) for {src} -> {dst_dir}: {out}")
 
+
+def _is_same_file(src: Path, dst: Path, *, mtime_slack_ns: int = 2_000_000_000) -> bool:
+    """Ritorna True se dst esiste ed è 'identico' a src (stessa size e mtime entro una tolleranza)."""
+    try:
+        s1 = os.stat(src)
+        s2 = os.stat(dst)
+    except OSError:
+        return False
+    return s1.st_size == s2.st_size and abs(s1.st_mtime_ns - s2.st_mtime_ns) <= mtime_slack_ns
+
 def _fast_copy_or_link(src: Path, dst: Path):
     """Prova hardlink, altrimenti copia SOLO i dati (niente metadati)."""
     try:
         os.link(src, dst)              # istantaneo se stesso volume/share
     except OSError:
         # Volumi diversi / share → usa Robocopy (dir→dir con filtro file)
+        dest_path = Path(dst).parent / Path(src).name
+        if _is_same_file(src, dest_path):
+            # Pre-check: se il file di destinazione è già identico, evita robocopy.
+            # Solo per copia: negli spostamenti servono comunque le delete.
+            return
         _robocopy_file(src, Path(dst).parent, move=False)
 
 def copy_to(src: Path, dst_dir: Path):
