@@ -69,6 +69,8 @@ if sys.platform == "win32":
     FIND_FIRST_EX_LARGE_FETCH = 2
     FindExInfoBasic = 1
     FindExSearchNameMatch = 0
+    ERROR_FILE_NOT_FOUND = 2
+    ERROR_PATH_NOT_FOUND = 3
 
     class WIN32_FIND_DATAW(ctypes.Structure):
         _fields_ = [
@@ -142,6 +144,10 @@ if sys.platform == "win32":
             FIND_FIRST_EX_LARGE_FETCH,
         )
         if h == INVALID_HANDLE_VALUE:
+            err = ctypes.get_last_error()
+            if err in (ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND):
+                # evitare il fallback su "no match" riduce round-trip SMB
+                return tuple()
             return _win_find_names(dirp, pattern)
         names: list[str] = []
         try:
@@ -185,10 +191,9 @@ def _list_same_doc_prefisso(dirp: Path, m: re.Match) -> list[tuple[str, str, str
     names = tuple(
         nm
         for nm in names_all
-        if nm.lower().endswith((".tif", ".pdf")) and BASE_NAME.fullmatch(nm)
+        if nm.lower().endswith((".tif", ".pdf"))
     )
-    if not names:
-        return []
+    # la validazione regex è demandata a _parse_prefixed
     return _parse_prefixed(names)
 
 # ---- LOGGING -------------------------------------------------------------------------
