@@ -4,7 +4,7 @@ import os, sys, subprocess, shutil
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
-from Swarky import BASE_NAME, map_location
+from Swarky import BASE_NAME, map_location, _docno_from_match
 
 LIGHT_BG = "#eef3f9"
 
@@ -54,6 +54,7 @@ class PariRevWindow(tk.Toplevel):
         )
         self.lst_srfolder.grid(row=1, column=0, sticky="nsew")
         self.lst_srfolder.bind("<Double-Button-1>", self._open_selected)
+        self.lst_srfolder.bind("<<ListboxSelect>>", self._copy_docno_prefix)
 
         # ----- colonna destra -----
         right = ttk.Frame(self, padding=PAD)
@@ -154,6 +155,21 @@ class PariRevWindow(tk.Toplevel):
         p = Path(self.cfg.PARI_REV_DIR) / self.lst_srfolder.get(sel[0])
         if p.exists():
             _open_path(p)
+
+    def _copy_docno_prefix(self, _evt=None) -> None:
+        sel = self.lst_srfolder.curselection()
+        if not sel:
+            return
+        name = self.lst_srfolder.get(sel[0])
+        m = BASE_NAME.fullmatch(name)
+        if not m:
+            return
+        try:
+            docno = _docno_from_match(m)
+            self.clipboard_clear()
+            self.clipboard_append(docno)
+        except Exception:
+            pass
 
     def _goto_sr_folder(self) -> None:
         _open_path(self.cfg.PARI_REV_DIR)
