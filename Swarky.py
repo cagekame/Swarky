@@ -60,55 +60,109 @@ ISS_BASENAME = re.compile(r"G(\d{4})([A-Za-z0-9]{4})([A-Za-z0-9]{6})ISSR(\d{2})S
 
 # ---- PREFISSO DOCNO: LISTA NOMI SENZA ENUM COMPLETA -------------------------
 
-import ctypes, ctypes.wintypes as wt
+if sys.platform == "win32":
+    import ctypes
+    import ctypes.wintypes as wt
 
-INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
-FILE_ATTRIBUTE_DIRECTORY = 0x10
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+    FILE_ATTRIBUTE_DIRECTORY = 0x10
+    FIND_FIRST_EX_LARGE_FETCH = 2
+    FindExInfoBasic = 1
+    FindExSearchNameMatch = 0
 
-class WIN32_FIND_DATAW(ctypes.Structure):
-    _fields_ = [
-        ("dwFileAttributes", wt.DWORD),
-        ("ftCreationTime", wt.FILETIME),
-        ("ftLastAccessTime", wt.FILETIME),
-        ("ftLastWriteTime", wt.FILETIME),
-        ("nFileSizeHigh", wt.DWORD),
-        ("nFileSizeLow", wt.DWORD),
-        ("dwReserved0", wt.DWORD),
-        ("dwReserved1", wt.DWORD),
-        ("cFileName", ctypes.c_wchar * 260),
-        ("cAlternateFileName", ctypes.c_wchar * 14),
-    ]
+    class WIN32_FIND_DATAW(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wt.DWORD),
+            ("ftCreationTime", wt.FILETIME),
+            ("ftLastAccessTime", wt.FILETIME),
+            ("ftLastWriteTime", wt.FILETIME),
+            ("nFileSizeHigh", wt.DWORD),
+            ("nFileSizeLow", wt.DWORD),
+            ("dwReserved0", wt.DWORD),
+            ("dwReserved1", wt.DWORD),
+            ("cFileName", ctypes.c_wchar * 260),
+            ("cAlternateFileName", ctypes.c_wchar * 14),
+        ]
 
-_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-_FindFirstFileW = _k32.FindFirstFileW
-_FindFirstFileW.argtypes = [wt.LPCWSTR, ctypes.POINTER(WIN32_FIND_DATAW)]
-_FindFirstFileW.restype  = wt.HANDLE
-_FindNextFileW  = _k32.FindNextFileW
-_FindNextFileW.argtypes  = [wt.HANDLE, ctypes.POINTER(WIN32_FIND_DATAW)]
-_FindNextFileW.restype   = wt.BOOL
-_FindClose      = _k32.FindClose
-_FindClose.argtypes      = [wt.HANDLE]
-_FindClose.restype       = wt.BOOL
-
-def _win_find_names(dirp: Path, pattern: str) -> tuple[str, ...]:
-    """Ritorna i NOMI file che matchano pattern in dirp, match lato server (veloce su SMB)."""
-    query = str(dirp / pattern)
-    data = WIN32_FIND_DATAW()
-    h = _FindFirstFileW(query, ctypes.byref(data))
-    if h == INVALID_HANDLE_VALUE:
-        return tuple()
-    names: list[str] = []
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _FindFirstFileW = _k32.FindFirstFileW
+    _FindFirstFileW.argtypes = [wt.LPCWSTR, ctypes.POINTER(WIN32_FIND_DATAW)]
+    _FindFirstFileW.restype = wt.HANDLE
+    _FindNextFileW = _k32.FindNextFileW
+    _FindNextFileW.argtypes = [wt.HANDLE, ctypes.POINTER(WIN32_FIND_DATAW)]
+    _FindNextFileW.restype = wt.BOOL
+    _FindClose = _k32.FindClose
+    _FindClose.argtypes = [wt.HANDLE]
+    _FindClose.restype = wt.BOOL
     try:
-        while True:
-            nm = data.cFileName
-            if nm not in (".", ".."):
-                if not (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY):
+        _FindFirstFileExW = _k32.FindFirstFileExW
+        _FindFirstFileExW.argtypes = [
+            wt.LPCWSTR,
+            ctypes.c_int,
+            ctypes.POINTER(WIN32_FIND_DATAW),
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wt.DWORD,
+        ]
+        _FindFirstFileExW.restype = wt.HANDLE
+    except AttributeError:
+        _FindFirstFileExW = None
+
+    def _win_find_names(dirp: Path, pattern: str) -> tuple[str, ...]:
+        """Ritorna i NOMI file che matchano pattern in dirp, match lato server (veloce su SMB)."""
+        query = str(dirp / pattern)
+        data = WIN32_FIND_DATAW()
+        h = _FindFirstFileW(query, ctypes.byref(data))
+        if h == INVALID_HANDLE_VALUE:
+            return tuple()
+        names: list[str] = []
+        try:
+            while True:
+                nm = data.cFileName
+                if nm not in (".", "..") and not (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY):
                     names.append(nm)
-            if not _FindNextFileW(h, ctypes.byref(data)):
-                break
-    finally:
-        _FindClose(h)
-    return tuple(names)
+                if not _FindNextFileW(h, ctypes.byref(data)):
+                    break
+        finally:
+            _FindClose(h)
+        return tuple(names)
+
+    def _win_find_names_ex(dirp: Path, pattern: str) -> tuple[str, ...]:
+        """Usa FindFirstFileExW con LARGE_FETCH per ridurre i round-trip SMB; fallback a _win_find_names."""
+        if _FindFirstFileExW is None:
+            return _win_find_names(dirp, pattern)
+        query = str(dirp / pattern)
+        data = WIN32_FIND_DATAW()
+        h = _FindFirstFileExW(
+            query,
+            FindExInfoBasic,
+            ctypes.byref(data),
+            FindExSearchNameMatch,
+            None,
+            FIND_FIRST_EX_LARGE_FETCH,
+        )
+        if h == INVALID_HANDLE_VALUE:
+            return _win_find_names(dirp, pattern)
+        names: list[str] = []
+        try:
+            while True:
+                nm = data.cFileName
+                if nm not in (".", "..") and not (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY):
+                    names.append(nm)
+                if not _FindNextFileW(h, ctypes.byref(data)):
+                    break
+        finally:
+            _FindClose(h)
+        return tuple(names)
+
+else:
+    def _win_find_names(dirp: Path, pattern: str) -> tuple[str, ...]:
+        """Enumerazione base via glob quando WinAPI non è disponibile."""
+        return tuple(p.name for p in dirp.glob(pattern))
+
+    def _win_find_names_ex(dirp: Path, pattern: str) -> tuple[str, ...]:
+        """Fallback trasparente a _win_find_names su piattaforme non Windows."""
+        return _win_find_names(dirp, pattern)
 
 def _docno_from_match(m: re.Match) -> str:
     return f"D{m.group(1)}{m.group(2)}{m.group(3)}"
@@ -122,18 +176,19 @@ def _parse_prefixed(names: tuple[str, ...]) -> list[tuple[str, str, str, str]]:
             out.append((mm.group(4), nm, mm.group(6).upper(), mm.group(5)))
     return out
 
-def _list_same_doc_prefisso(dirp: Path, m: re.Match) -> list[tuple[str,str,str,str]]:
-    """
-    Unica query SMB per PREFISSO DOCNO (non tutta la cartella).
-    Prende TUTTI i nomi che iniziano con docno (qualsiasi R??, S??, metrica; solo .tif/.pdf),
-    poi il resto dei controlli (rev/sheet/uom) avviene in RAM.
-    """
+def _list_same_doc_prefisso(dirp: Path, m: re.Match) -> list[tuple[str, str, str, str]]:
+    """Riduce i round-trip SMB enumerando docno* una sola volta e filtrando in RAM, senza ordinare."""
     docno = _docno_from_match(m)
-    names_tif = _win_find_names(dirp, f"{docno}*.tif")
-    names_pdf = _win_find_names(dirp, f"{docno}*.pdf")
-    if not names_tif and not names_pdf:
+    names_all = _win_find_names_ex(dirp, f"{docno}*")
+    if not names_all:
         return []
-    names = tuple(sorted(set(names_tif) | set(names_pdf)))
+    names = tuple(
+        nm
+        for nm in names_all
+        if nm.lower().endswith((".tif", ".pdf")) and BASE_NAME.fullmatch(nm)
+    )
+    if not names:
+        return []
     return _parse_prefixed(names)
 
 # ---- LOGGING -------------------------------------------------------------------------
