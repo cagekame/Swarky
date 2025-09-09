@@ -39,6 +39,7 @@ class PariRevWindow(tk.Toplevel):
 
         PAD = (8,8,8,8)
         LABEL_PAD = (0,4)
+        WIDTH_BTN = 30
 
         # ----- colonna sinistra -----
         left = ttk.Frame(self, padding=PAD)
@@ -50,7 +51,7 @@ class PariRevWindow(tk.Toplevel):
 
         self.lst_srfolder = tk.Listbox(
             left, bg="navy", fg="light gray",
-            width=23, exportselection=False, selectmode="browse"
+            width=30, exportselection=False, selectmode="browse"
         )
         self.lst_srfolder.grid(row=1, column=0, sticky="nsew")
         self.lst_srfolder.bind("<Double-Button-1>", self._open_selected)
@@ -68,10 +69,10 @@ class PariRevWindow(tk.Toplevel):
         btns = ttk.Frame(right)
         btns.grid(row=1, column=0, sticky="nsew")
 
-        self.btn_sr_go     = ttk.Button(btns, text="Start Process",  width=23, command=self._start_process_worker)
-        self.btn_getnumber = ttk.Button(btns, text="Get Number",     width=23, command=self._not_implemented)
-        self.btn_goto      = ttk.Button(btns, text="GoTo Folder",    width=23, command=self._goto_dest_folder)
-        self.btn_srdir     = ttk.Button(btns, text="Goto Sr Folder", width=23, command=self._goto_sr_folder)
+        self.btn_sr_go     = ttk.Button(btns, text="Start Process",  width=WIDTH_BTN, command=self._start_process_worker)
+        self.btn_getnumber = ttk.Button(btns, text="Get Number",     width=WIDTH_BTN, command=self._not_implemented)
+        self.btn_goto      = ttk.Button(btns, text="GoTo Folder",    width=WIDTH_BTN, command=self._goto_dest_folder)
+        self.btn_srdir     = ttk.Button(btns, text="Goto Sr Folder", width=WIDTH_BTN, command=self._goto_sr_folder)
         buttons = (self.btn_sr_go, self.btn_getnumber, self.btn_goto, self.btn_srdir)
         for i, b in enumerate(buttons):
             pady = (0,3) if i == 0 else (3,0) if i == len(buttons)-1 else 3
@@ -98,7 +99,7 @@ class PariRevWindow(tk.Toplevel):
 
         # ogni colonna non va sotto la sua larghezza necessaria
         self.columnconfigure(0, minsize=lb_min)
-        self.columnconfigure(1, minsize=max(lb_min, btn_min))
+        self.columnconfigure(1, minsize=btn_min)
 
         # la finestra non può stringersi sotto lo stato iniziale
         self.minsize(self.winfo_width(), self.winfo_height())
