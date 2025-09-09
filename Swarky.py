@@ -570,7 +570,11 @@ def _storico_dest_dir_for_name(cfg: Config, nm: str) -> Path:
 # ---- PIPELINE PRINCIPALE -------------------------------------------------------------
 
 def _iter_candidates(dirp: Path, accept_pdf: bool):
-    # Scansione solo della cartella Plotter (locale o comunque input): ok
+    """
+    Elenca i file candidati nella cartella Plotter.
+    Accetta sempre .tif; opzionalmente .pdf se accept_pdf=True.
+    Non è ricorsiva.
+    """
     exts = {".tif"}
     if accept_pdf:
         exts.add(".pdf")
@@ -582,20 +586,33 @@ def _iter_candidates(dirp: Path, accept_pdf: bool):
                     yield Path(de.path)
 
 def _process_candidate(p: Path, cfg: Config) -> bool:
+    """
+    Nuova logica per sheet:
+      - Confronto per REVISONE separato per gruppi: MI={M,I}, DN={D,N}
+      - Se new_rev < max_rev del proprio gruppo -> ERROR (Revisione Precedente)
+      - Se esiste l'altro gruppo sullo stesso sheet:
+          * se new_rev < max_rev ALTRO gruppo -> ERROR (Revisione Precedente vs altro gruppo)
+          * se new_rev == max_rev ALTRO gruppo -> CONFLITTO metrica a pari rev -> ERROR (non tocchi nulla)
+          * se new_rev >  max_rev ALTRO gruppo -> storicizza SOLO i file dell'altro gruppo con rev < new_rev
+      - A pari rev & sheet:
+          * MI: M e I possono coesistere; se esiste DN a pari rev -> ERROR (conflitto)
+          * DN: D e N NON possono coesistere tra loro né con MI -> ERROR (conflitto)
+      - Quando new_rev è maggiore del proprio gruppo -> storicizza SOLO i file del proprio gruppo con rev < new_rev
+      - Orientamento controllato PRIMA di qualunque move
+    """
     try:
+        # normalizzazione estensione on-the-fly
         suf = p.suffix
         if suf == ".TIF":
             q = p.with_suffix(".tif")
             try:
-                p.rename(q)
-                p = q
+                p.rename(q); p = q
             except Exception:
                 pass
         elif suf.lower() == ".tiff":
             q = p.with_suffix(".tif")
             try:
-                p.rename(q)
-                p = q
+                p.rename(q); p = q
             except Exception:
                 pass
 
@@ -603,124 +620,180 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
         with timeit(f"{name} regex+validate"):
             m = BASE_NAME.fullmatch(name)
             if not m:
-                log_error(cfg, name, "Nome File Errato")
-                move_to(p, cfg.ERROR_DIR)
-                return True
+                log_error(cfg, name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); return True
             if m.group(1).upper() not in "ABCDE":
-                log_error(cfg, name, "Formato Errato")
-                move_to(p, cfg.ERROR_DIR)
-                return True
+                log_error(cfg, name, "Formato Errato"); move_to(p, cfg.ERROR_DIR); return True
             if m.group(2).upper() not in "MKFTESNP":
-                log_error(cfg, name, "Location Errata")
-                move_to(p, cfg.ERROR_DIR)
-                return True
+                log_error(cfg, name, "Location Errata"); move_to(p, cfg.ERROR_DIR); return True
             if m.group(6).upper() not in "MIDN":
-                log_error(cfg, name, "Metrica Errata")
-                move_to(p, cfg.ERROR_DIR)
-                return True
+                log_error(cfg, name, "Metrica Errata"); move_to(p, cfg.ERROR_DIR); return True
 
-        new_rev = m.group(4)
-        new_sheet = m.group(5)
+        new_rev    = m.group(4)
+        new_sheet  = m.group(5)
         new_metric = m.group(6).upper()
+        MI = {"M","I"}
+        DN = {"D","N"}
+        new_group = "MI" if new_metric in MI else "DN"
 
         with timeit(f"{name} map_location"):
             loc = map_location(m, cfg)
             dir_tif_loc = loc["dir_tif_loc"]
-            tiflog = loc["log_name"]
+            tiflog      = loc["log_name"]
 
-        with timeit(f"{name} accept"):
-            lock = _get_doc_lock(dir_tif_loc, m)
-            with lock:
-                with timeit(f"{name} check_same_filename (exists-fast)"):
-                    if (dir_tif_loc / name).exists():
-                        log_error(cfg, name, "Pari Revisione")
-                        move_to(p, cfg.PARI_REV_DIR)
-                        return True
+        lock = _get_doc_lock(dir_tif_loc, m)
+        with lock:
+            # pari revisione (nome identico) già presente?
+            with timeit(f"{name} check_same_filename (exists-fast)"):
+                if (dir_tif_loc / name).exists():
+                    log_error(cfg, name, "Pari Revisione"); move_to(p, cfg.PARI_REV_DIR); return True
 
-                with timeit(f"{name} list_same_doc_prefisso"):
-                    same_doc = _list_same_doc_prefisso(dir_tif_loc, m)
+            # elenco candidati per stesso DOCNO (tutti sheet/metriche) → filtriamo per sheet
+            with timeit(f"{name} list_same_doc_prefisso"):
+                same_doc = _list_same_doc_prefisso(dir_tif_loc, m)
 
-                with timeit(f"{name} derive_same_sheet"):
-                    same_sheet = [(r, nm, met, sh) for (r, nm, met, sh) in same_doc if sh == new_sheet]
+            with timeit(f"{name} derive_same_sheet"):
+                same_sheet = [(r, nm, met, sh) for (r, nm, met, sh) in same_doc if sh == new_sheet]
 
-                with timeit(f"{name} derive_same_rs"):
-                    same_rs = [(r, nm, met, sh) for (r, nm, met, sh) in same_sheet if r == new_rev]
+            # dup check via lista (ridondante ma sicuro)
+            with timeit(f"{name} check_same_filename (list-verify)"):
+                if any(nm == name for r, nm, met, sh in same_sheet if r == new_rev):
+                    log_error(cfg, name, "Pari Revisione"); move_to(p, cfg.PARI_REV_DIR); return True
 
-                with timeit(f"{name} check_same_filename (list-verify)"):
-                    if any(nm == name for _, nm, _, _ in same_rs):
-                        log_error(cfg, name, "Pari Revisione")
-                        move_to(p, cfg.PARI_REV_DIR)
-                        return True
+            # partizionamento per gruppi sullo stesso sheet
+            same_sheet_mi = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met in MI]
+            same_sheet_dn = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met in DN]
 
-                with timeit(f"{name} probe_max_rev_same_sheet"):
-                    max_rev_same_sheet = None
-                    for r, _, _, _ in same_sheet:
-                        if (max_rev_same_sheet is None) or (int(r) > int(max_rev_same_sheet)):
-                            max_rev_same_sheet = r
+            def _max_rev(entries: List[Tuple[int,str,str]]) -> Optional[int]:
+                return max((rv for (rv, _, _) in entries), default=None)
 
-                with timeit(f"{name} rev_decision"):
-                    if max_rev_same_sheet is not None:
-                        if int(new_rev) < int(max_rev_same_sheet):
-                            ref = next((nm for r, nm, _, _ in same_sheet if r == max_rev_same_sheet), "")
-                            log_error(cfg, name, "Revisione Precendente", ref)
-                            move_to(p, cfg.ERROR_DIR)
-                            return True
-                        elif int(new_rev) > int(max_rev_same_sheet):
-                            with timeit(f"{name} move_old_revs_same_sheet"):
-                                for r, nm, _, _ in same_sheet:
-                                    if int(r) < int(new_rev):
-                                        old_path = dir_tif_loc / nm
-                                        dest_dir = _storico_dest_dir_for_name(cfg, nm)
-                                        dest_path = dest_dir / nm
-                                        try:
-                                            if dest_path.exists():
-                                                log_error(cfg, nm, "Presente in Storico")
-                                                try:
-                                                    move_to(old_path, cfg.ERROR_DIR)
-                                                except FileNotFoundError:
-                                                    pass
-                                                except Exception as e:
-                                                    logging.exception("Storico: impossibile spostare %s → %s: %s", old_path, cfg.ERROR_DIR, e)
-                                            else:
-                                                try:
-                                                    move_to(old_path, dest_dir)
-                                                    log_swarky(cfg, name, tiflog, "Rev superata", nm, "Storico")
-                                                except FileNotFoundError:
-                                                    pass
-                                                except Exception as e:
-                                                    logging.exception("Storico: impossibile spostare %s → %s: %s", old_path, dest_dir, e)
-                                        except Exception as e:
-                                            logging.exception("Storico: impossibile spostare %s → %s: %s", old_path, dest_dir, e)
-                        else:
-                            other = next((nm for _, nm, met, _ in same_rs if met != new_metric), None)
-                            if other:
-                                log_swarky(cfg, name, tiflog, "Metrica Diversa", other)
+            max_mi = _max_rev(same_sheet_mi)
+            max_dn = _max_rev(same_sheet_dn)
+            new_rev_i = int(new_rev)
 
-                with timeit(f"{name} orientamento"):
-                    if not check_orientation_ok(p):
-                        log_error(cfg, name, "Immagine Girata")
-                        move_to(p, cfg.ERROR_DIR)
-                        return True
+            # ---- controlli "revisione precedente" rispetto GRUPPO ALTRO ----
+            other_group = "DN" if new_group == "MI" else "MI"
+            other_entries = same_sheet_dn if new_group == "MI" else same_sheet_mi
+            other_max = max_dn if new_group == "MI" else max_mi
+            if other_max is not None and new_rev_i < other_max:
+                ref = next((nm for (rv, nm, _met) in other_entries if rv == other_max), "")
+                log_error(cfg, name, "Revisione Precendente", ref)
+                move_to(p, cfg.ERROR_DIR)
+                return True
 
-                with timeit(f"{name} move_to_archivio"):
-                    move_to(p, dir_tif_loc)
-                    new_path = dir_tif_loc / name
+            # ---- controlli "revisione precedente" rispetto PROPRIO GRUPPO ----
+            own_entries = same_sheet_mi if new_group == "MI" else same_sheet_dn
+            own_max = max_mi if new_group == "MI" else max_dn
+            if own_max is not None and new_rev_i < own_max:
+                ref = next((nm for (rv, nm, _met) in own_entries if rv == own_max), "")
+                log_error(cfg, name, "Revisione Precendente", ref)
+                move_to(p, cfg.ERROR_DIR)
+                return True
 
-            with timeit(f"{name} link/copy_to_PLM"):
-                try:
-                    _fast_copy_or_link(new_path, cfg.PLM_DIR / name)
-                except Exception as e:
-                    logging.exception("PLM copy/link fallita per %s: %s", new_path, e)
+            # ---- conflitti a PARI REV & SHEET ----
+            same_rev_mi = [(rv, nm, met) for (rv, nm, met) in same_sheet_mi if rv == new_rev_i]
+            same_rev_dn = [(rv, nm, met) for (rv, nm, met) in same_sheet_dn if rv == new_rev_i]
 
-            with timeit(f"{name} write_EDI"):
-                try:
-                    write_edi(cfg, name, cfg.PLM_DIR, m=m, loc=loc)
-                except Exception as e:
-                    logging.exception("Impossibile creare DESEDI per %s: %s", name, e)
+            if new_group == "MI":
+                # MI può coesistere con l'altra metrica MI; ma NON con DN a pari rev
+                if same_rev_dn:
+                    ref = same_rev_dn[0][1]
+                    log_error(cfg, name, "Conflitto Metrica (DN a pari revisione)", ref)
+                    move_to(p, cfg.ERROR_DIR)
+                    return True
+                # se coesiste con MI opposta, puoi anche loggare l'informazione
+                other_mi = next((nm for (_rv, nm, met) in same_rev_mi if met != new_metric), None)
+                if other_mi:
+                    log_swarky(cfg, name, tiflog, "Metrica Diversa", other_mi)
+            else:
+                # DN non coesiste con nessuno a pari rev (né MI, né l'altro DN)
+                if same_rev_mi:
+                    ref = same_rev_mi[0][1]
+                    log_error(cfg, name, "Conflitto Metrica (MI a pari revisione)", ref)
+                    move_to(p, cfg.ERROR_DIR)
+                    return True
+                other_dn = next((nm for (_rv, nm, met) in same_rev_dn if met != new_metric), None)
+                if other_dn:
+                    log_error(cfg, name, "Conflitto Metrica (D/N a pari revisione)", other_dn)
+                    move_to(p, cfg.ERROR_DIR)
+                    return True
 
-            log_swarky(cfg, name, tiflog, "Archiviato", "", dest=tiflog)
+            # ---- ORIENTAMENTO: PRIMA di qualsiasi spostamento ----
+            with timeit(f"{name} orientamento"):
+                if not check_orientation_ok(p):
+                    log_error(cfg, name, "Immagine Girata")
+                    move_to(p, cfg.ERROR_DIR)
+                    return True
 
+            # ---- STORICIZZAZIONI ----
+            # 1) entro il PROPRIO gruppo quando new_rev è maggiore
+            if own_max is None or new_rev_i > own_max:
+                with timeit(f"{name} move_old_revs_same_group"):
+                    for rv, nm, _met in own_entries:
+                        if rv < new_rev_i:
+                            old_path = dir_tif_loc / nm
+                            dest_dir  = _storico_dest_dir_for_name(cfg, nm)
+                            dest_path = dest_dir / nm
+                            try:
+                                if dest_path.exists():
+                                    log_error(cfg, nm, "Presente in Storico")
+                                    try:
+                                        move_to(old_path, cfg.ERROR_DIR)
+                                    except FileNotFoundError:
+                                        pass
+                                else:
+                                    try:
+                                        move_to(old_path, dest_dir)
+                                        log_swarky(cfg, name, tiflog, "Rev superata", nm, "Storico")
+                                    except FileNotFoundError:
+                                        pass
+                            except Exception as e:
+                                logging.exception("Storico (own grp): %s → %s: %s", old_path, dest_dir, e)
+
+            # 2) verso l'ALTRO gruppo quando il nuovo è più recente dell'altro gruppo
+            if other_max is not None and new_rev_i > other_max:
+                with timeit(f"{name} move_old_revs_other_group"):
+                    for rv, nm, _met in other_entries:
+                        if rv < new_rev_i:
+                            old_path = dir_tif_loc / nm
+                            dest_dir  = _storico_dest_dir_for_name(cfg, nm)
+                            dest_path = dest_dir / nm
+                            try:
+                                if dest_path.exists():
+                                    log_error(cfg, nm, "Presente in Storico")
+                                    try:
+                                        move_to(old_path, cfg.ERROR_DIR)
+                                    except FileNotFoundError:
+                                        pass
+                                else:
+                                    try:
+                                        move_to(old_path, dest_dir)
+                                        log_swarky(cfg, name, tiflog, "Rev superata", nm, "Storico")
+                                    except FileNotFoundError:
+                                        pass
+                            except Exception as e:
+                                logging.exception("Storico (other grp): %s → %s: %s", old_path, dest_dir, e)
+
+            # ---- ACCETTAZIONE finale del nuovo ----
+            with timeit(f"{name} move_to_archivio"):
+                move_to(p, dir_tif_loc)
+                new_path = dir_tif_loc / name
+
+        # fuori dal lock: PLM + EDI + log finale
+        with timeit(f"{name} link/copy_to_PLM"):
+            try:
+                _fast_copy_or_link(new_path, cfg.PLM_DIR / name)
+            except Exception as e:
+                logging.exception("PLM copy/link fallita per %s: %s", new_path, e)
+
+        with timeit(f"{name} write_EDI"):
+            try:
+                write_edi(cfg, name, cfg.PLM_DIR, m=m, loc=loc)
+            except Exception as e:
+                logging.exception("Impossibile creare DESEDI per %s: %s", name, e)
+
+        log_swarky(cfg, name, tiflog, "Archiviato", "", dest=tiflog)
         return True
+
     except Exception:
         logging.exception("Errore inatteso per %s", p)
         return False
@@ -757,12 +830,14 @@ def archive_once(cfg: Config) -> bool:
 
 # ---- ISS / FIV ----------------------------------------------------------------------
 
-def iss_loading(cfg: Config):
+def iss_loading(cfg: Config) -> bool:
+    did = False
     try:
         candidates = [p for p in cfg.DIR_ISS.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
     except Exception as e:
         logging.exception("ISS: impossibile leggere la cartella %s: %s", cfg.DIR_ISS, e)
-        return
+        return False
+
     for p in candidates:
         m = ISS_BASENAME.fullmatch(p.name)
         if not m:
@@ -772,6 +847,7 @@ def iss_loading(cfg: Config):
             move_to(p, cfg.PLM_DIR)
             write_edi(cfg, file_name=p.name, out_dir=cfg.PLM_DIR, iss_match=m)
             log_swarky(cfg, p.name, "ISS", "ISS", "", "")
+            did = True
         except Exception as e:
             logging.exception("Impossibile processare ISS %s: %s", p.name, e)
         try:
@@ -782,12 +858,16 @@ def iss_loading(cfg: Config):
         except Exception:
             logging.exception("ISS: impossibile aggiornare SwarkyISS.log")
 
-def fiv_loading(cfg: Config):
+    return did
+
+def fiv_loading(cfg: Config) -> bool:
+    did = False
     try:
         files = [p for p in cfg.DIR_FIV_LOADING.iterdir() if p.is_file()]
     except Exception as e:
         logging.exception("FIV: lettura cartella fallita: %s", e)
-        return
+        return False
+
     for p in files:
         ext = p.suffix.lower()
         if ext not in (".tif", ".tiff") and not (cfg.ACCEPT_PDF and ext == ".pdf"):
@@ -801,8 +881,11 @@ def fiv_loading(cfg: Config):
             write_edi(cfg, m=m, file_name=p.name, loc=loc, out_dir=cfg.PLM_DIR)
             move_to(p, cfg.PLM_DIR)
             log_swarky(cfg, p.name, "FIV", "FIV loading", "", "")
+            did = True
         except Exception as e:
             logging.exception("Impossibile processare FIV %s: %s", p.name, e)
+
+    return did
 
 # ---- STATS --------------------------------------------------------------------------
 
@@ -850,12 +933,12 @@ def count_tif_files(cfg: Config) -> dict:
 # ---- LOOP ----------------------------------------------------------------------------
 
 def run_once(cfg: Config) -> bool:
-    did_something = archive_once(cfg)
-    iss_loading(cfg)
-    fiv_loading(cfg)
+    did_arch = archive_once(cfg)
+    did_iss  = iss_loading(cfg)
+    did_fiv  = fiv_loading(cfg)
     if logging.getLogger().isEnabledFor(logging.DEBUG) and _should_emit_stats():
         logging.debug("Counts: %s", count_tif_files(cfg))
-    return did_something
+    return did_arch or did_iss or did_fiv
 
 def watch_loop(cfg: Config, interval: int):
     logging.info("Watch ogni %ds...", interval)
