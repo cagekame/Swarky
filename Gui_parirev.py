@@ -3,10 +3,14 @@ from __future__ import annotations
 import os, sys, subprocess, shutil
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 from Swarky import BASE_NAME, map_location, _docno_from_match
 
 LIGHT_BG = "#eef3f9"
+NAVY_BG  = "#000080"
+NAVY_SEL = "#133869"
+FG_LIGHT = "light gray"
+FG_WHITE = "white"
 
 def _open_path(path: Path) -> None:
     try:
@@ -27,87 +31,76 @@ class PariRevWindow(tk.Toplevel):
         self.resizable(True, True)
         self.cfg = cfg
 
-        style = ttk.Style(self)
-        try: style.theme_use("clam")
-        except tk.TclError: pass
-        style.configure(".", background=LIGHT_BG)
-
         # ===== griglia finestra: 2 colonne sopra + info + LOG sotto =====
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
         self.rowconfigure(2, weight=1)  # il LOG si espande
 
-        PAD = (8,8,8,8)
-        LABEL_PAD = (0,4)
-        WIDTH_BTN = 30
+        PAD = 8
+        LABEL_PADY = (0,4)
+        BTN_W = 20
 
         # ----- colonna sinistra -----
-        left = ttk.Frame(self, padding=PAD)
-        left.grid(row=0, column=0, sticky="nsew")
+        left = tk.Frame(self, bg=LIGHT_BG)
+        left.grid(row=0, column=0, sticky="nsew", padx=PAD, pady=PAD)
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(1, weight=1)  # la listbox riempie e tocca il fondo
+        left.rowconfigure(1, weight=1)
 
-        ttk.Label(left, text="Same Revision").grid(row=0, column=0, sticky="w", pady=LABEL_PAD)
+        tk.Label(left, text="Same Revision", bg=LIGHT_BG).grid(row=0, column=0, sticky="w", pady=LABEL_PADY)
 
         self.lst_srfolder = tk.Listbox(
-            left, bg="navy", fg="light gray",
-            width=30, exportselection=False, selectmode="browse"
+            left,
+            bg=NAVY_BG, fg=FG_LIGHT, selectbackground=NAVY_SEL, selectforeground=FG_WHITE,
+            width=30, exportselection=False, selectmode="browse", highlightthickness=0, borderwidth=0
         )
         self.lst_srfolder.grid(row=1, column=0, sticky="nsew")
         self.lst_srfolder.bind("<Double-Button-1>", self._open_selected)
         self.lst_srfolder.bind("<<ListboxSelect>>", self._on_select)
 
         # ----- colonna destra -----
-        right = ttk.Frame(self, padding=PAD)
-        right.grid(row=0, column=1, sticky="nsew")
+        right = tk.Frame(self, bg=LIGHT_BG)
+        right.grid(row=0, column=1, sticky="nsew", padx=PAD, pady=PAD)
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=1)  # i pulsanti si espandono verticalmente
+        right.rowconfigure(1, weight=1)
 
-        ttk.Label(right, text="Azioni").grid(row=0, column=0, sticky="w", pady=LABEL_PAD)
+        tk.Label(right, text="Azioni", bg=LIGHT_BG).grid(row=0, column=0, sticky="w", pady=LABEL_PADY)
 
-        # blocco pulsanti che riempie la colonna destra
-        btns = ttk.Frame(right)
+        btns = tk.Frame(right, bg=LIGHT_BG)
         btns.grid(row=1, column=0, sticky="nsew")
 
-        self.btn_sr_go     = ttk.Button(btns, text="Start Process",  width=WIDTH_BTN, command=self._start_process_worker)
-        self.btn_getnumber = ttk.Button(btns, text="Get Number",     width=WIDTH_BTN, command=self._not_implemented)
-        self.btn_goto      = ttk.Button(btns, text="GoTo Folder",    width=WIDTH_BTN, command=self._goto_dest_folder)
-        self.btn_srdir     = ttk.Button(btns, text="Goto Sr Folder", width=WIDTH_BTN, command=self._goto_sr_folder)
-        buttons = (self.btn_sr_go, self.btn_getnumber, self.btn_goto, self.btn_srdir)
-        for i, b in enumerate(buttons):
-            pady = (0,3) if i == 0 else (3,0) if i == len(buttons)-1 else 3
+        self.btn_sr_go     = tk.Button(btns, text="Start Process",  width=BTN_W, command=self._start_process_worker)
+        self.btn_getnumber = tk.Button(btns, text="Get Number",     width=BTN_W, command=self._not_implemented)
+        self.btn_goto      = tk.Button(btns, text="GoTo Folder",    width=BTN_W, command=self._goto_dest_folder)
+        self.btn_srdir     = tk.Button(btns, text="Goto Sr Folder", width=BTN_W, command=self._goto_sr_folder)
+
+        for i, b in enumerate((self.btn_sr_go, self.btn_getnumber, self.btn_goto, self.btn_srdir)):
+            pady = (0,3) if i == 0 else (3,0) if i == 3 else 3
             b.pack(fill="x", expand=True, pady=pady)
 
         # ----- info dimensione disegno -----
         self._size_var = tk.StringVar(value="Drawing size (Kilobyte): 0")
-        ttk.Label(self, textvariable=self._size_var).grid(
-            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(0,8)
+        tk.Label(self, textvariable=self._size_var, bg=LIGHT_BG).grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=PAD, pady=(0,PAD)
         )
 
-        # ----- LOG sotto a tutta larghezza -----
-        logf = ttk.Frame(self, padding=(8,0,8,8))
-        logf.grid(row=2, column=0, columnspan=2, sticky="nsew")
+        # ----- LOG sotto -----
+        logf = tk.Frame(self, bg=LIGHT_BG)
+        logf.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=PAD, pady=(0, PAD))
         logf.columnconfigure(0, weight=1)
         logf.rowconfigure(1, weight=1)
-        ttk.Label(logf, text="LOG").grid(row=0, column=0, sticky="w", pady=(0,4))
-        self.lst_log = tk.Listbox(logf, bg="navy", fg="light gray", height=10)
+
+        tk.Label(logf, text="LOG", bg=LIGHT_BG).grid(row=0, column=0, sticky="w", pady=(0,4))
+        self.lst_log = tk.Listbox(logf, bg=NAVY_BG, fg=FG_LIGHT, height=10, highlightthickness=0, borderwidth=0,
+                                  selectbackground=NAVY_SEL, selectforeground=FG_WHITE)
         self.lst_log.grid(row=1, column=0, sticky="nsew")
 
-        # centro, popolo, poi blocco le minime
+        # centro e popolo
         self.transient(master)
         self._center_on_parent()
         self.refresh_list()
 
-        # ---- larghezze minime: NON restringere sotto i 23 char ----
+        # Blocca dimensione minima sull’attuale (solo su questa finestra)
         self.update_idletasks()
-        lb_min  = self.lst_srfolder.winfo_reqwidth()
-        btn_min = max(b.winfo_reqwidth() for b in (self.btn_sr_go, self.btn_getnumber, self.btn_goto, self.btn_srdir))
-
-        # ogni colonna non va sotto la sua larghezza necessaria
-        self.columnconfigure(0, minsize=lb_min)
-        self.columnconfigure(1, minsize=btn_min)
-
-        # la finestra non può stringersi sotto lo stato iniziale
         self.minsize(self.winfo_width(), self.winfo_height())
 
     # -------- listbox refresh (pausa se focus, ripristina selezione) --------
@@ -217,10 +210,7 @@ class PariRevWindow(tk.Toplevel):
 
     def _start_process_worker(self) -> None:
         try:
-            self.btn_sr_go.state(["disabled"])
-        except Exception:
-            pass
-        try:
+            self.btn_sr_go.config(state="disabled")
             sel = self.lst_srfolder.curselection()
             if len(sel) != 1:
                 messagebox.showinfo("FSR", "Seleziona **un solo** file.")
@@ -259,10 +249,7 @@ class PariRevWindow(tk.Toplevel):
                 self._log(f"{nm} → {human_loc}: ERRORE copia → {e}")
                 messagebox.showerror("FSR", f"Errore durante la copia:\n{e}")
         finally:
-            try:
-                self.btn_sr_go.state(["!disabled"])
-            except Exception:
-                pass
+            self.btn_sr_go.config(state="normal")
 
     # -------- window helpers --------
     def _center_on_parent(self) -> None:
