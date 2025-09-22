@@ -9,6 +9,8 @@ import json
 import logging
 import threading
 import os, sys, subprocess
+import tkinter.simpledialog as simpledialog
+import time
 from pathlib import Path
 from datetime import datetime, time as dt_time, timedelta
 from typing import Optional, Dict
@@ -52,12 +54,34 @@ class SwarkyApp:
 
         # Root
         self.root = tk.Tk()
+        try:
+            self.root.iconbitmap(default="esse.ico")
+        except Exception:
+            pass
         self.root.title("Swarky")
         self.root.configure(bg=LIGHT_BG)
+        
+        # Icona finestra anche in exe (PyInstaller onefile)
+        def resource_path(rel: str) -> str:
+            import sys, os
+            from pathlib import Path
+            base = getattr(sys, "_MEIPASS", os.getcwd())  # cartella temporanea del bundle
+            return str(Path(base) / rel)
+
+        try:
+            self.root.iconbitmap(default=resource_path("esse.ico"))
+        except Exception as e:
+            logging.debug("iconbitmap fallita: %s", e)
 
         self._run_error_notified = False
         self._run_in_progress = False
         self._run_lock = threading.Lock()
+
+        # Flag: blocca gli scan di Plotter durante il batch backend
+        self._scan_plotter_disabled = False
+        # Debounce id per refresh Plotter
+        self._refresh_plotter_after_id: Optional[str] = None
+        self._phase_tick_id: Optional[str] = None
 
         # Config boot
         self._ensure_default_config()
@@ -82,6 +106,65 @@ class SwarkyApp:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         
+    # ---------------- Tabellari ----------------
+    def open_tabellari(self) -> None:
+        """
+        1) Chiede 'Numero Disegno' (es: DXX123456)
+        2) Chiede 'Quante posizioni vuoi inserire?' (es: 7)
+        3) Genera un TXT in DIR_TABELLARI con una singola riga:
+           DXX12345601,DXX12345602, ...
+        """
+        try:
+            # --- Input 1: prefisso ---
+            prefix = simpledialog.askstring(
+                "Tabellari", "Inserisci Numero Disegno:", parent=self.root
+            )
+            if prefix is None:  # annulla
+                return
+            prefix = prefix.strip().upper()
+
+            # Validazione semplice: D + 2 lettere + 6 cifre
+            import re
+            if not re.fullmatch(r"D[A-Z]{2}\d{6}", prefix):
+                messagebox.showerror("Tabellari", "Formato non valido.\nAtteso: D + due lettere + 6 cifre.")
+                return
+
+            # --- Input 2: numero posizioni ---
+            n_str = simpledialog.askstring(
+                "Tabellari", "Quante posizioni vuoi inserire?", parent=self.root
+            )
+            if n_str is None:
+                return
+            n_str = n_str.strip()
+            if not n_str.isdigit():
+                messagebox.showerror("Tabellari", "Inserisci un numero intero valido.")
+                return
+
+            n = int(n_str)
+            if n <= 0 or n > 99:
+                messagebox.showerror("Tabellari", "Il numero deve essere tra 1 e 99.")
+                return
+
+            # --- Generazione stringhe: 01..NN a 2 cifre ---
+            items = [f"{prefix}{i:02d}" for i in range(1, n + 1)]
+            line = ",".join(items) + "\n"
+
+            # --- Scrittura file ---
+            out_dir = self.cfg.DIR_TABELLARI
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"{prefix}_tabellari.txt"
+
+            with out_path.open("w", encoding="utf-8") as f:
+                f.write(line)
+
+            messagebox.showinfo("Tabellari", f"File creato:\n{out_path}")
+            # opzionale: apri la cartella
+            # _open_path(out_dir)
+
+        except Exception as e:
+            logging.exception("Errore Tabellari")
+            messagebox.showerror("Tabellari", f"Errore imprevisto:\n{e}")
+                
     # ---------------- CONFIG (solo JSON) ----------------
     def _ensure_default_config(self) -> None:
         if self.json_path.exists():
@@ -103,7 +186,8 @@ class SwarkyApp:
             },
             "AUTO_TIME": "",
             "LOG_LEVEL": "INFO",
-            "ACCEPT_PDF": True
+            "ACCEPT_PDF": True,
+            "LOG_PHASES": True
         }
         try:
             self.json_path.write_text(json.dumps(default, indent=2), encoding="utf-8")
@@ -140,6 +224,7 @@ class SwarkyApp:
             LOG_DIR           = _p(paths.get("log_dir")),
             LOG_LEVEL         = logging.INFO if data.get("LOG_LEVEL","INFO")=="INFO" else logging.DEBUG,
             ACCEPT_PDF        = bool(data.get("ACCEPT_PDF", True)),
+            LOG_PHASES        = bool(data.get("LOG_PHASES", True)),
         )
 
     def _reload_cfg(self) -> None:
@@ -175,7 +260,6 @@ class SwarkyApp:
             self.root.columnconfigure(c, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-      #  self.plotter_frame   = ttk.Frame(self.root)        
         self.lbl_plm_errors_var = tk.StringVar(value="N° PLM errors: 0")
         self.lbl_check_var      = tk.StringVar(value="N° Check Dwgs: 0")
         self.lbl_same_var       = tk.StringVar(value="N° Same Rev.: 0")
@@ -201,26 +285,23 @@ class SwarkyApp:
                                        font=("Consolas",9)
                                        )
         self.plotter_list.pack(fill="both", expand=True)
-        
         self.plotter_list.bind("<Double-Button-1>", self._open_selected_plotter)
         
         # Anomalie
         self.anomaly_tree = ttk.Treeview(
-        self.anomaly_frame, 
+            self.anomaly_frame, 
             columns=("data","ora","file","errore"),
             show="headings",
             style="Navy.Treeview"
         )
-            
         for col, head, w in (
             ("data","Data",90),
             ("ora","Ora",70),
             ("file","File",160),
             ("errore","Errore",180)
-            ):
+        ):
             self.anomaly_tree.heading(col, text=head, anchor="w")
             self.anomaly_tree.column(col, width=w, anchor="w", stretch=True)
-            
         self.anomaly_tree.pack(fill="both", expand=True)
 
         # Processati
@@ -230,7 +311,6 @@ class SwarkyApp:
             show="headings",
             style="Navy.Treeview"
         )
-            
         for col, head, w in (
             ("data","Data",90),
             ("ora","Ora",70),
@@ -238,10 +318,9 @@ class SwarkyApp:
             ("proc","Processo",160),
             ("dest","Destinazione",150),
             ("conf","Confronto",180)
-            ):
+        ):
             self.processed_tree.heading(col, text=head, anchor="w")
             self.processed_tree.column(col, width=w, anchor="w", stretch=True)
-            
         self.processed_tree.pack(fill="both", expand=True)
 
         # Min sizes
@@ -265,12 +344,19 @@ class SwarkyApp:
         self.btn_start.pack(side="left", padx=4)
         self.btn_stop.pack(side="left", padx=4)
         ttk.Button(self.controls, text="Pulisci", command=self._clear_tables).pack(side="left", padx=4)
-        ttk.Button(self.controls, text="PariRev", command=self.open_parirev).pack(side="left", padx=4)
         ttk.Button(self.controls, text="Plotter", command=self._open_plotter_folder).pack(side="left", padx=4)
+        ttk.Button(self.controls, text="PariRev", command=self.open_parirev).pack(side="left", padx=4)
+        ttk.Button(self.controls, text="Tabellari", command=self.open_tabellari).pack(side="left", padx=4)
         ttk.Button(self.controls, text="Settings", command=self.open_settings).pack(side="left", padx=4)
 
-        self.clock_label = ttk.Label(self.controls)
+        # Orologio (larghezza fissa: "dd/mm/yyyy hh:mm:ss" = 19 char)
+        self.clock_label = ttk.Label(self.controls, width=19, anchor="e")
         self.clock_label.pack(side="right", padx=5)
+
+        # Label stato fasi (fase + ms) con larghezza fissa
+        self.phase_var = tk.StringVar(value="Pronto.")
+        self.phase_label = ttk.Label(self.controls, textvariable=self.phase_var, width=36, anchor="e")
+        self.phase_label.pack(side="right", padx=8)
 
         # Logging → GUI
         self.tree_handler = _TreeviewHandler(self)
@@ -284,31 +370,25 @@ class SwarkyApp:
         self.anomaly_tree.insert("", "end", values=(data, ora, file, errore))
         
     # ---------------- Gestione contatori ----------------        
-   
     def update_counters(self) -> None:
-        # prende i contatori dal backend
         try:
             stats = count_tif_files(self.cfg)
         except Exception:
             stats = {}
-
-        # N° Drawings = quanti elementi hai caricato nella listbox
         drawings = 0
         try:
             drawings = self.plotter_list.size()
         except Exception:
             pass
-
         self.lbl_drawings_var.set(f"N° Drawings: {drawings}")
         self.lbl_same_var.set(f"N° Same Rev.: {stats.get('Same Rev Dwg', 0)}")
         self.lbl_check_var.set(f"N° Check Dwgs: {stats.get('Check Dwg', 0)}")
         self.lbl_plm_errors_var.set(f"N° PLM errors: {stats.get('Plm error Dwg', 0)}")
         
-
     # ---------------- Plotter ----------------
     def refresh_plotter(self) -> None:
+        """Full scan della cartella Plotter (usare con parsimonia)."""
         self.plotter_list.delete(0, tk.END)
-        # mostra i PDF solo se abilitato in config
         if getattr(self.cfg, "ACCEPT_PDF", True):
             patterns = ("*.tif","*.TIF","*.pdf","*.PDF")
         else:
@@ -320,8 +400,25 @@ class SwarkyApp:
             files = {}
         for name in sorted(files.values(), key=str.lower):
             self.plotter_list.insert(tk.END, name)
-        
         self.update_counters()
+
+    def request_plotter_refresh(self, delay_ms: int = 300) -> None:
+        """Debounce: pianifica un refresh_plotter unico entro delay_ms."""
+        if self._scan_plotter_disabled:
+            return
+        # coalesca più richieste ravvicinate
+        if self._refresh_plotter_after_id is not None:
+            try:
+                self.root.after_cancel(self._refresh_plotter_after_id)
+            except Exception:
+                pass
+            self._refresh_plotter_after_id = None
+        self._refresh_plotter_after_id = self.root.after(delay_ms, self._do_debounced_refresh)
+
+    def _do_debounced_refresh(self) -> None:
+        self._refresh_plotter_after_id = None
+        if not self._scan_plotter_disabled:
+            self.refresh_plotter()
 
     def _open_selected_plotter(self, _=None) -> None:
         sel = self.plotter_list.curselection()
@@ -354,7 +451,9 @@ class SwarkyApp:
 
     # ---------------- Timer & clock ----------------
     def periodic_plotter_refresh(self) -> None:
-        self.refresh_plotter()
+        """Aggiorna periodicamente, rispettando il blocco scan e usando debounce."""
+        if not self._scan_plotter_disabled:
+            self.request_plotter_refresh(delay_ms=300)
         self._refresh_parirev()
         self.root.after(10000 if self.plotter_observer else 1000, self.periodic_plotter_refresh)
 
@@ -364,12 +463,10 @@ class SwarkyApp:
 
     # ---------------- Run & scheduler ----------------
     def run_once_thread(self) -> None:
-        # debounce: se già in corso, ignora altri click
         if self._run_in_progress:
             return
         self._run_in_progress = True
         try:
-            # disabilita il bottone mentre gira
             self.btn_swarky.state(["disabled"])
         except Exception:
             pass
@@ -380,6 +477,16 @@ class SwarkyApp:
             if not self._run_lock.acquire(blocking=False):
                 self.root.after(0, lambda: messagebox.showinfo("Attendi", "Un'elaborazione è già in corso."))
                 return
+
+            # Blocca gli scan di Plotter durante il batch
+            self._scan_plotter_disabled = True
+            # Cancella un eventuale debounce in coda
+            if self._refresh_plotter_after_id is not None:
+                try:
+                    self.root.after_cancel(self._refresh_plotter_after_id)
+                except Exception:
+                    pass
+                self._refresh_plotter_after_id = None
 
             result = run_once(self.cfg)
             self.root.after(0, lambda: messagebox.showinfo(
@@ -404,10 +511,18 @@ class SwarkyApp:
                 except Exception:
                     pass
             self._run_in_progress = False
-            self.root.after(0, lambda: (self.btn_swarky.state(["!disabled"]),
-            self.refresh_plotter(),
-            self._refresh_parirev()
-            ))
+
+            # Riabilita scan e fai UN solo refresh finale
+            def _after_batch():
+                self._scan_plotter_disabled = False
+                self.refresh_plotter()
+                self._refresh_parirev()
+                self._phase_end("Pronto.")
+                try:
+                    self.btn_swarky.state(["!disabled"])
+                except Exception:
+                    pass
+            self.root.after(0, _after_batch)
 
     def _schedule_if_ready(self) -> None:
         if hasattr(self, "_schedule_id") and self._schedule_id is not None:
@@ -436,8 +551,11 @@ class SwarkyApp:
         app = self
         class Handler(FileSystemEventHandler):
             def _refresh(self, event):
-                if not getattr(event, "is_directory", False):
-                    app.root.after(0, app.refresh_plotter)
+                if getattr(event, "is_directory", False):
+                    return
+                # Rispetta il blocco scan; usa debounce
+                if not app._scan_plotter_disabled:
+                    app.root.after(0, app.request_plotter_refresh)
                     app.root.after(0, app._refresh_parirev)
             on_created = on_moved = on_deleted = _refresh
         try:
@@ -454,20 +572,34 @@ class SwarkyApp:
         while not stop_event.is_set():
             try:
                 if not self._run_lock.acquire(blocking=False):
-                    # già in corso: salta questo giro
                     pass
                 else:
                     try:
+                        # Blocca gli scan nel thread di watch per la durata del batch
+                        self._scan_plotter_disabled = True
+                        if self._refresh_plotter_after_id is not None:
+                            try:
+                                self.root.after_cancel(self._refresh_plotter_after_id)
+                            except Exception:
+                                pass
+                            self._refresh_plotter_after_id = None
+
                         result = run_once(self.cfg)
                         msg = "Completato." if result else "Nessun file."
                         logging.info("Watch: %s", msg)
-                        # opzionale: puoi anche aggiornare un’etichetta di stato
                         self.root.after(0, lambda m=msg: self.clock_label.config(text=f"{datetime.now():%H:%M:%S} • {m}"))
                     finally:
                         try:
                             self._run_lock.release()
                         except Exception:
                             pass
+                        # Riabilita scan e un refresh finale
+                        def _after_watch_batch():
+                            self._scan_plotter_disabled = False
+                            self.refresh_plotter()
+                            self._refresh_parirev()
+                            self._phase_end("Pronto.")
+                        self.root.after(0, _after_watch_batch)
             except Exception as e:
                 if not self._run_error_notified:
                     self._run_error_notified = True
@@ -477,8 +609,6 @@ class SwarkyApp:
                         "Errore durante l'esecuzione periodica (config incompleta o percorsi non validi?).\n\n"
                         f"Dettagli: {msg}\nIl watch continuerà a provare."
                     ))
-            finally:
-                self.root.after(0, self.refresh_plotter)
 
             # attesa intervallo, interrotta se arriva stop_event
             for _ in range(interval):
@@ -523,7 +653,6 @@ class SwarkyApp:
         SettingsDialog(self)
         
     def open_parirev(self) -> None:
-        # Evita finestre duplicate
         try:
             if getattr(self, "_parirev_win", None) and self._parirev_win.winfo_exists():
                 self._parirev_win.focus_set()
@@ -532,12 +661,58 @@ class SwarkyApp:
             pass
         try:
             from Gui_Parirev import PariRevWindow
-            self._parirev_win = PariRevWindow(self.root, self.cfg)  # passa la cfg se serve
+            self._parirev_win = PariRevWindow(self.root, self.cfg)
         except Exception as e:
             messagebox.showerror("PariRev", f"Impossibile aprire l'interfaccia PariRev:\n{e}")
+ 
+ # ---------------- Phase timer ----------------
+    def _phase_start(self, text: str) -> None:
+        """Avvia/Resetta timer per la fase corrente e mostra testo+ms."""
+        # stop di un possibile ticker precedente
+        try:
+            if hasattr(self, "_phase_tick_id") and self._phase_tick_id:
+                self.root.after_cancel(self._phase_tick_id)
+                self._phase_tick_id = None
+        except Exception:
+            pass
+
+        self._phase_text = text
+        self._phase_t0 = time.perf_counter()
+        self.phase_var.set(f"{text} • 0 ms")
+        self._phase_tick_id = self.root.after(50, self._phase_tick)
+
+    def _phase_tick(self) -> None:
+        try:
+            if not hasattr(self, "_phase_t0"):
+                return
+            ms = int((time.perf_counter() - self._phase_t0) * 1000)
+            self.phase_var.set(f"{self._phase_text} • {ms} ms")
+            self._phase_tick_id = self.root.after(50, self._phase_tick)
+        except Exception:
+            pass
+
+    def _phase_end(self, final_text: str | None = None) -> None:
+        """Ferma il timer fase e mostra eventualmente un testo finale."""
+        try:
+            if hasattr(self, "_phase_tick_id") and self._phase_tick_id:
+                self.root.after_cancel(self._phase_tick_id)
+                self._phase_tick_id = None
+        except Exception:
+            pass
+        self.phase_var.set(final_text or "Pronto.")
+        for attr in ("_phase_t0", "_phase_text"):
+            if hasattr(self, attr):
+                delattr(self, attr)
+            
 
     # ---------------- Close ----------------
     def _on_close(self) -> None:
+        # spegne eventuale ticker/label di fase attivo
+        try:
+            self._phase_end()
+        except Exception:
+            pass
+
         try:
             if self.plotter_observer:
                 self.plotter_observer.stop()
@@ -601,9 +776,15 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(frm, text="Accetta PDF nella cartella Plotter", variable=self.accept_pdf_var).grid(
             row=r+1, column=0, columnspan=2, sticky="w", pady=(0,8)
         )
+        
+        # Checkbox LOG_PHASES
+        self.log_phases_var = tk.BooleanVar(value=bool(self._log_phases))
+        ttk.Checkbutton(frm, text="Mostra fasi (inizio/fine) nel file di log", variable=self.log_phases_var).grid(
+            row=r+2, column=0, columnspan=2, sticky="w", pady=(0,8)
+        )
 
         btns = ttk.Frame(frm)
-        btns.grid(row=r+2, column=0, columnspan=3, sticky="e", pady=(12,0))
+        btns.grid(row=r+3, column=0, columnspan=3, sticky="e", pady=(12,0))
         ttk.Button(btns, text="Annulla", command=self.destroy).pack(side="right", padx=6)
         ttk.Button(btns, text="Salva", command=self._save).pack(side="right")
 
@@ -619,6 +800,7 @@ class SettingsDialog(tk.Toplevel):
         self._auto_time = data.get("AUTO_TIME", "")
         self._log_level = data.get("LOG_LEVEL", "INFO")
         self._accept_pdf = data.get("ACCEPT_PDF", True)
+        self._log_phases = data.get("LOG_PHASES", True)
 
     def _browse_dir(self, key: str) -> None:
         start = self.vars[key].get().strip() or str(Path.cwd())
@@ -657,7 +839,8 @@ class SettingsDialog(tk.Toplevel):
             "paths": new_paths,
             "AUTO_TIME": auto_time,
             "LOG_LEVEL": self._log_level,
-            "ACCEPT_PDF": bool(self.accept_pdf_var.get())
+            "ACCEPT_PDF": bool(self.accept_pdf_var.get()),
+            "LOG_PHASES": bool(self.log_phases_var.get())
         }
         try:
             self.app.json_path.write_text(json.dumps(data_out, indent=2), encoding="utf-8")
@@ -672,35 +855,75 @@ class SettingsDialog(tk.Toplevel):
         messagebox.showinfo("OK", "Impostazioni salvate e applicate.")
         self.destroy()
 
-
 class _TreeviewHandler(logging.Handler):
     def __init__(self, app: SwarkyApp):
         super().__init__()
         self.app = app
 
+    def _remove_from_plotter_listbox(self, file_name: str) -> None:
+        """Rimuove un item dalla listbox senza scandire la cartella (evita round-trip)."""
+        try:
+            lb = self.app.plotter_list
+            names = lb.get(0, 'end')
+            if file_name in names:
+                idx = names.index(file_name)
+                lb.delete(idx)
+                self.app.update_counters()
+        except Exception:
+            pass
+
     def emit(self, record: logging.LogRecord) -> None:
         ui = getattr(record, "ui", None)
         if not ui:
             return
-        kind, file_name, *rest = ui
+
+        kind = ui[0]
         ts = datetime.fromtimestamp(record.created)
+
         if kind == "processed":
-            process = rest[0] if rest else ""
-            compare = rest[1] if len(rest) > 1 else ""
-            dest    = rest[2] if len(rest) > 2 else ""
+            # ui = ("processed", file_name, process, compare, dest)
+            file_name = ui[1]
+            process   = ui[2] if len(ui) > 2 else ""
+            compare   = ui[3] if len(ui) > 3 else ""
+            dest      = ui[4] if len(ui) > 4 else ""
             def _add():
                 self.app.insert_processed(ts.strftime("%d.%b.%Y"),
                                           ts.strftime("%H:%M:%S"),
                                           file_name, process, dest, compare)
+                self._remove_from_plotter_listbox(file_name)
             self.app.root.after(0, _add)
+
         elif kind == "anomaly":
-            msg = rest[0] if rest else ""
+            # ui = ("anomaly", file_name, msg)
+            file_name = ui[1]
+            msg       = ui[2] if len(ui) > 2 else ""
             def _add():
                 self.app.insert_anomaly(ts.strftime("%d.%b.%Y"),
                                         ts.strftime("%H:%M:%S"),
                                         file_name, msg)
+                self._remove_from_plotter_listbox(file_name)
             self.app.root.after(0, _add)
 
+        elif kind == "phase":
+            # ui = ("phase", "Testo fase corrente")
+            phase_text = ui[1] if len(ui) > 1 else ""
+            self.app.root.after(0, lambda: self.app._phase_start(phase_text))
+
+        elif kind in ("phase_end", "phase_done"):
+            # ui ("phase_end", "Testo finale?")  oppure ("phase_done", elapsed_ms)
+            def _end():
+                final_text = None
+                if kind == "phase_end":
+                    final_text = ui[1] if len(ui) > 1 else None
+                elif kind == "phase_done":
+                    try:
+                        elapsed_ms = int(ui[1]) if len(ui) > 1 else None
+                        if elapsed_ms is not None:
+                            final_text = f"Completato • {elapsed_ms} ms"
+                    except Exception:
+                        final_text = None
+                self.app._phase_end(final_text)
+            self.app.root.after(0, _end)
 
 def main() -> None:
     SwarkyApp().run()
