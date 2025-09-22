@@ -2,13 +2,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import sys, re, time, logging, json, os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
-from perf import timeit
 
 # Solo Windows
 if sys.platform != "win32":
@@ -31,7 +28,8 @@ class Config:
     DIR_TABELLARI: Path
     LOG_DIR: Optional[Path] = None
     LOG_LEVEL: int = logging.INFO
-    ACCEPT_PDF: bool = True  # flag per accettazione PDF nel Plotter
+    ACCEPT_PDF: bool = True
+    LOG_PHASES: bool = True  # <— flag GUI/FILE per log fasi
 
     @staticmethod
     def from_json(d: Dict[str, Any]) -> "Config":
@@ -57,6 +55,7 @@ class Config:
             LOG_DIR=Path(log_dir) if log_dir else None,
             LOG_LEVEL=logging.INFO,
             ACCEPT_PDF=bool(d.get("ACCEPT_PDF", True)),
+            LOG_PHASES=bool(d.get("LOG_PHASES", True)),
         )
 
 # ---- REGEX ---------------------------------------------------------------------------
@@ -164,15 +163,54 @@ def _win_find_names_ex(dirp: Path, pattern: str) -> tuple[str, ...]:
         _FindClose(h)
     return tuple(names)
 
-# ---- CopyFileW wrapper ----------
+# ---- CopyFile2 + fallback CopyFileW -----------------------------------------
+
+class COPYFILE2_EXTENDED_PARAMETERS(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wt.DWORD),
+        ("dwCopyFlags", wt.DWORD),
+        ("pfCancel", ctypes.POINTER(wt.BOOL)),
+        ("pProgressRoutine", ctypes.c_void_p),
+        ("pvCallbackContext", ctypes.c_void_p),
+    ]
+
+COPY_FILE_FAIL_IF_EXISTS  = 0x00000001
+COPY_FILE_RESTARTABLE     = 0x00000002
+
+try:
+    _CopyFile2 = _k32.CopyFile2
+    _CopyFile2.argtypes = [wt.LPCWSTR, wt.LPCWSTR, ctypes.POINTER(COPYFILE2_EXTENDED_PARAMETERS)]
+    _CopyFile2.restype  = wt.HRESULT
+    _HAS_COPYFILE2 = True
+except AttributeError:
+    _CopyFile2 = None
+    _HAS_COPYFILE2 = False
+
 _k32.CopyFileW.argtypes = [wt.LPCWSTR, wt.LPCWSTR, wt.BOOL]
 _k32.CopyFileW.restype  = wt.BOOL
 
-def _win_copyfile(src: Path, dst: Path) -> None:
-    ok = _k32.CopyFileW(str(src), str(dst), False)  # False => sovrascrive se esiste
+def _win_copyfile_basic(src: Path, dst: Path, *, overwrite: bool = True) -> None:
+    ok = _k32.CopyFileW(str(src), str(dst), wt.BOOL(not overwrite))
     if not ok:
         err = ctypes.get_last_error()
-        raise OSError(err, f"CopyFileW failed {src} -> {dst}")
+        raise OSError(err, f"CopyFileW failed {src} -> {dst} (err={err})")
+
+def _copy_file_best(src: Path, dst: Path, *, overwrite: bool = True) -> None:
+    if _HAS_COPYFILE2:
+        try:
+            params = COPYFILE2_EXTENDED_PARAMETERS()
+            params.dwSize = ctypes.sizeof(COPYFILE2_EXTENDED_PARAMETERS)
+            params.dwCopyFlags = COPY_FILE_RESTARTABLE | (COPY_FILE_FAIL_IF_EXISTS if not overwrite else 0)
+            params.pfCancel = None
+            params.pProgressRoutine = None
+            params.pvCallbackContext = None
+            hr = _CopyFile2(str(src), str(dst), ctypes.byref(params))
+            if hr == 0:  # S_OK
+                return
+            logging.debug("CopyFile2 hr=0x%08X for %s -> %s; fallback a CopyFileW", hr & 0xFFFFFFFF, src, dst)
+        except Exception as ex:
+            logging.debug("CopyFile2 exception %r for %s -> %s; fallback a CopyFileW", ex, src, dst)
+    _win_copyfile_basic(src, dst, overwrite=overwrite)
 
 # ---- UTILS PREFISSO ---------------------------------------------------------
 
@@ -197,22 +235,6 @@ def _list_same_doc_prefisso(dirp: Path, m: re.Match) -> list[tuple[str, str, str
     names = tuple(nm for nm in names_all if nm.lower().endswith((".tif", ".pdf")))
     return _parse_prefixed(names)
 
-_DOC_LOCKS: Dict[tuple[str, str], threading.Lock] = {}
-_DOC_LOCKS_MASTER = threading.Lock()
-
-def _doc_key(dir_tif_loc: Path, m: re.Match) -> tuple[str, str]:
-    base = os.path.normcase(os.fspath(dir_tif_loc))
-    return (base, f"D{m.group(1)}{m.group(2)}{m.group(3)}")
-
-def _get_doc_lock(dir_tif_loc: Path, m: re.Match) -> threading.Lock:
-    key = _doc_key(dir_tif_loc, m)
-    with _DOC_LOCKS_MASTER:
-        lock = _DOC_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _DOC_LOCKS[key] = lock
-    return lock
-
 # ---- LOGGING -------------------------------------------------------------------------
 
 _FILE_LOG_BUF: list[str] = []  # buffer per log-file batch
@@ -221,16 +243,35 @@ def month_tag() -> str:
     return datetime.now().strftime("%b.%Y")
 
 def setup_logging(cfg: Config):
-    level = cfg.LOG_LEVEL
     log_dir = cfg.LOG_DIR or cfg.DIR_HPLOTTER
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"Swarky_{month_tag()}.log"
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[logging.FileHandler(log_file, encoding="utf-8")]
-    )
+
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s",
+                            datefmt="%Y-%m-%d %H:%M:%S")
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setFormatter(fmt)
+
+    class _PhaseFilter(logging.Filter):
+        def __init__(self, enable_phases: bool):
+            super().__init__()
+            self.enable_phases = enable_phases
+        def filter(self, record: logging.LogRecord) -> bool:
+            ui = getattr(record, "ui", None)
+            if not self.enable_phases and ui:
+                return False
+            return True
+
+    fh.addFilter(_PhaseFilter(cfg.LOG_PHASES))
+
+    root = logging.getLogger()
+    root.setLevel(cfg.LOG_LEVEL)
+
+    # mantieni altri handler (es. GUI), sostituisci solo il FileHandler
+    new_handlers = [h for h in root.handlers if not isinstance(h, logging.FileHandler)]
+    new_handlers.append(fh)
+    root.handlers = new_handlers
+
     logging.debug("Log file: %s", log_file)
 
 def _append_filelog_line(line: str) -> None:
@@ -250,7 +291,6 @@ def _flush_file_log(cfg: Config) -> None:
 # ---- FS UTILS ------------------------------------------------------------------------
 
 def _is_same_file(src: Path, dst: Path, *, mtime_slack_ns: int = 2_000_000_000) -> bool:
-    """True se dst esiste ed è 'identico' a src (stessa size e mtime entro una tolleranza)."""
     try:
         s1 = os.stat(src)
         s2 = os.stat(dst)
@@ -259,49 +299,40 @@ def _is_same_file(src: Path, dst: Path, *, mtime_slack_ns: int = 2_000_000_000) 
     return s1.st_size == s2.st_size and abs(s1.st_mtime_ns - s2.st_mtime_ns) <= mtime_slack_ns
 
 def _fast_copy_or_link(src: Path, dst: Path):
-    """Hardlink se stesso volume/share; altrimenti copia interna (WinAPI)."""
     try:
-        os.link(src, dst)  # istantaneo se stesso volume/share
+        os.link(src, dst)
         return
     except OSError:
         pass
-    _win_copyfile(src, dst)
+    _copy_file_best(src, dst, overwrite=True)
 
 def copy_to(src: Path, dst_dir: Path):
     dst_dir.mkdir(parents=True, exist_ok=True)
     _fast_copy_or_link(src, dst_dir / src.name)
 
 def move_to(src: Path, dst_dir: Path):
-    """
-    Sposta con rename atomico se possibile; se fallisce (volumi diversi),
-    CopyFileW + delete della sorgente (senza processi esterni).
-    """
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / src.name
     try:
-        os.replace(src, dst)     # stesso volume
+        os.replace(src, dst)
     except OSError:
-        _win_copyfile(src, dst)  # cross-volume/share
+        _copy_file_best(src, dst, overwrite=True)
         try:
             src.unlink(missing_ok=True)
         except Exception:
             pass
 
 def move_to_storico_safe(src: Path, dst_dir: Path) -> tuple[bool, int]:
-    """
-    Sposta src in dst_dir in modalità 'safe' (NON sovrascrivere mai).
-    Ritorna (copied_and_deleted, rc_simbolico) dove rc=1 ok, 0 skip perché già presente, 8 errore.
-    """
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / src.name
     if dst.exists():
-        return (False, 0)  # già presente → non tocchiamo src
+        return (False, 0)
     try:
-        os.replace(src, dst)  # stesso volume? ottimo
+        os.replace(src, dst)
         return (True, 1)
     except OSError:
         try:
-            _win_copyfile(src, dst)
+            _copy_file_best(src, dst, overwrite=True)
             src.unlink(missing_ok=True)
             return (True, 1)
         except Exception:
@@ -352,7 +383,6 @@ def uom_from_letter(ch: str) -> str:
 # ---- ORIENTAMENTO TIFF: parser header-only -------------------------------
 
 def _tiff_read_size_vfast(path: Path) -> Optional[Tuple[int,int]]:
-    """Legge solo header/IFD per (width,height) Supporta II/MM, SHORT/LONG."""
     import struct
     try:
         with open(path, 'rb') as f:
@@ -407,7 +437,6 @@ def _tiff_read_size_vfast(path: Path) -> Optional[Tuple[int,int]]:
     return None
 
 def check_orientation_ok(tif_path: Path) -> bool:
-    """True se (width > height) o se è un PDF. Niente cache: lettura header è già veloce."""
     if tif_path.suffix.lower() == ".pdf":
         return True
     wh = _tiff_read_size_vfast(tif_path)
@@ -426,13 +455,36 @@ def _now_HHMMSS() -> str:
 def log_swarky(cfg: Config, file_name: str, loc: str, process: str,
                archive_dwg: str = "", dest: str = ""):
     line = f"{_now_ddmonYYYY()} # {_now_HHMMSS()} # {file_name}\t# {loc}\t# {process}\t# {archive_dwg}"
-    _append_filelog_line(line)
-    logging.info(line, extra={"ui": ("processed", file_name, process, archive_dwg, dest)})
+    _append_filelog_line(line)  # TXT batch
+    logging.info("processed %s", file_name,
+                 extra={"ui": ("processed", file_name, process, archive_dwg, dest)})
 
 def log_error(cfg: Config, file_name: str, err: str, archive_dwg: str = ""):
     line = f"{_now_ddmonYYYY()} # {_now_HHMMSS()} # {file_name}\t# ERRORE\t# {err}\t# {archive_dwg}"
-    _append_filelog_line(line)
-    logging.error(line, extra={"ui": ("anomaly", file_name, err)})
+    _append_filelog_line(line)  # TXT batch
+    logging.error("anomaly %s", file_name,
+                  extra={"ui": ("anomaly", file_name, err)})
+
+# ---- UI PHASES → eventi per la GUI ------------------------------------------
+
+class _UIPhase:
+    def __init__(self, label: str):
+        self.label = label
+        self.t0 = 0.0
+
+    def __enter__(self):
+        logging.info(self.label, extra={"ui": ("phase", self.label)})
+        self.t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        elapsed_ms = int((time.perf_counter() - self.t0) * 1000)
+        logging.info(f"{self.label} finita in {elapsed_ms} ms",
+                     extra={"ui": ("phase_done", elapsed_ms)})
+        return False
+
+def ui_phase(label: str) -> _UIPhase:
+    return _UIPhase(label)
 
 # ---- EDI WRITER --------------------------------------------------------------
 
@@ -495,8 +547,8 @@ def write_edi(
     file_name: str,
     out_dir: Path,
     *,
-    m: Optional[re.Match] = None,         # STANDARD/FIV
-    iss_match: Optional[re.Match] = None, # ISS
+    m: Optional[re.Match] = None,
+    iss_match: Optional[re.Match] = None,
     loc: Optional[dict] = None
 ) -> None:
     edi = out_dir / (Path(file_name).stem + ".DESEDI")
@@ -527,7 +579,7 @@ def write_edi(
     )
     write_lines(edi, body)
 
-# ---- STORICO: routing in sottocartelle DA/DB/DC/DD/DE/... ----------------------------
+# ---- STORICO: routing ---------------------------------------------------------------
 
 def _storico_dest_dir_for_name(cfg: Config, nm: str) -> Path:
     mm = BASE_NAME.fullmatch(nm)
@@ -550,7 +602,7 @@ def _iter_candidates(dirp: Path, accept_pdf: bool):
 
 def _process_candidate(p: Path, cfg: Config) -> bool:
     try:
-        # normalizzazione estensione on-the-fly
+        # --- normalizzazione estensione on-the-fly ---
         suf = p.suffix
         if suf == ".TIF":
             q = p.with_suffix(".tif")
@@ -568,13 +620,14 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
         name = p.name
 
         # ---- ORIENTAMENTO: subito in testa ----
-        with timeit(f"{name} orientamento (early)"):
+        with ui_phase(f"{name} • orientamento"):
             if not check_orientation_ok(p):
                 log_error(cfg, name, "Immagine Girata")
                 move_to(p, cfg.ERROR_DIR)
                 return True
 
-        with timeit(f"{name} regex+validate"):
+        # ---- Regex + validazioni ----
+        with ui_phase(f"{name} • regex+validate"):
             m = BASE_NAME.fullmatch(name)
             if not m:
                 log_error(cfg, name, "Nome File Errato"); move_to(p, cfg.ERROR_DIR); return True
@@ -588,110 +641,102 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
         new_rev    = m.group(4)
         new_sheet  = m.group(5)
         new_metric = m.group(6).upper()
-        MI = {"M","I"}
-        DN = {"D","N"}
+        MI = {"M","I"}; DN = {"D","N"}
         new_group = "MI" if new_metric in MI else "DN"
         new_rev_i = int(new_rev)
 
-        with timeit(f"{name} map_location"):
+        # ---- Mappatura destinazione archivio ----
+        with ui_phase(f"{name} • map_location"):
             loc = map_location(m, cfg)
             dir_tif_loc = loc["dir_tif_loc"]
             tiflog      = loc["log_name"]
 
-        # --- liste di azioni DA ESEGUIRE FUORI LOCK ---
+        # ---- Elenco file con stesso DOCNO ----
+        with ui_phase(f"{name} • list_same_doc_prefisso"):
+            same_doc = _list_same_doc_prefisso(dir_tif_loc, m)
+
+        with ui_phase(f"{name} • derive_same_sheet"):
+            same_sheet = [(r, nm, met, sh) for (r, nm, met, sh) in same_doc if sh == new_sheet]
+
+        # ---- Pari revisione (verifica via lista) ----
+        with ui_phase(f"{name} • check_same_filename"):
+            if any((nm == name and r == new_rev) for (r, nm, met, sh) in same_sheet):
+                log_error(cfg, name, "Pari Revisione")
+                move_to(p, cfg.PARI_REV_DIR)
+                return True
+
+        # ---- Partizionamento e max rev ----
+        same_sheet_mi = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met in MI]
+        same_sheet_dn = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met in DN]
+        same_sheet_same_metric = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met == new_metric]
+
+        def _max_rev(entries: List[Tuple[int,str,str]]) -> Optional[int]:
+            return max((rv for (rv, _, _) in entries), default=None)
+
+        max_mi = _max_rev(same_sheet_mi)
+        max_dn = _max_rev(same_sheet_dn)
+        own_max = _max_rev(same_sheet_same_metric)
+
+        # ---- Revisioni precedenti rispetto all'altro gruppo ----
+        other_entries = same_sheet_dn if new_group == "MI" else same_sheet_mi
+        other_max = max_dn if new_group == "MI" else max_mi
+        if other_max is not None and new_rev_i < other_max:
+            ref = next((nm for (rv, nm, _met) in other_entries if rv == other_max), "")
+            log_error(cfg, name, "Revisione Precendente", ref)
+            move_to(p, cfg.ERROR_DIR)
+            return True
+
+        # ---- Revisioni precedenti rispetto stessa metrica ----
+        if own_max is not None and new_rev_i < own_max:
+            ref = next((nm for (rv, nm, _met) in same_sheet_same_metric if rv == own_max), "")
+            log_error(cfg, name, "Revisione Precendente", ref)
+            move_to(p, cfg.ERROR_DIR)
+            return True
+
+        # ---- Conflitti pari rev tra gruppi/metrica ----
+        same_rev_mi = [(rv, nm, met) for (rv, nm, met) in same_sheet_mi if rv == new_rev_i]
+        same_rev_dn = [(rv, nm, met) for (rv, nm, met) in same_sheet_dn if rv == new_rev_i]
+
+        if new_group == "MI":
+            if same_rev_dn:
+                ref = same_rev_dn[0][1]
+                log_error(cfg, name, "Conflitto Metrica (DN a pari revisione)", ref)
+                move_to(p, cfg.ERROR_DIR)
+                return True
+            other_mi = next((nm for (_rv, nm, met) in same_rev_mi if met != new_metric), None)
+            if other_mi:
+                log_swarky(cfg, name, tiflog, "Metrica Diversa", other_mi)
+        else:
+            if same_rev_mi:
+                ref = same_rev_mi[0][1]
+                log_error(cfg, name, "Conflitto Metrica (MI a pari revisione)", ref)
+                move_to(p, cfg.ERROR_DIR)
+                return True
+            other_dn = next((nm for (_rv, nm, met) in same_rev_dn if met != new_metric), None)
+            if other_dn:
+                log_error(cfg, name, "Conflitto Metrica (D/N a pari revisione)", other_dn)
+                move_to(p, cfg.ERROR_DIR)
+                return True
+
+        # ---- ACCETTAZIONE del NUOVO ----
+        with ui_phase(f"{name} • move_to_archivio"):
+            move_to(p, dir_tif_loc)
+            new_path = dir_tif_loc / name
+
+        # ---- STORICIZZAZIONI (dopo l'accettazione) ----
         to_storico_same: list[tuple[Path, Path, str]] = []
         to_storico_other: list[tuple[Path, Path, str]] = []
+        if own_max is None or new_rev_i > own_max:
+            for rv, nm, _met in same_sheet_same_metric:
+                if rv < new_rev_i:
+                    to_storico_same.append((dir_tif_loc / nm, _storico_dest_dir_for_name(cfg, nm), nm))
+        if other_max is not None and new_rev_i > other_max:
+            for rv, nm, _met in other_entries:
+                if rv < new_rev_i:
+                    to_storico_other.append((dir_tif_loc / nm, _storico_dest_dir_for_name(cfg, nm), nm))
 
-        lock = _get_doc_lock(dir_tif_loc, m)
-        with lock:
-            # pari revisione (nome identico) già presente?
-            with timeit(f"{name} check_same_filename (exists-fast)"):
-                if (dir_tif_loc / name).exists():
-                    log_error(cfg, name, "Pari Revisione"); move_to(p, cfg.PARI_REV_DIR); return True
-
-            # elenco candidati stesso DOCNO → poi filtra per sheet
-            with timeit(f"{name} list_same_doc_prefisso"):
-                same_doc = _list_same_doc_prefisso(dir_tif_loc, m)
-
-            with timeit(f"{name} derive_same_sheet"):
-                same_sheet = [(r, nm, met, sh) for (r, nm, met, sh) in same_doc if sh == new_sheet]
-
-            # dup check via lista
-            with timeit(f"{name} check_same_filename (list-verify)"):
-                if any(nm == name for r, nm, met, sh in same_sheet if r == new_rev):
-                    log_error(cfg, name, "Pari Revisione"); move_to(p, cfg.PARI_REV_DIR); return True
-
-            # partizionamento per gruppi sullo stesso sheet
-            same_sheet_mi = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met in MI]
-            same_sheet_dn = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met in DN]
-            same_sheet_same_metric = [(int(r), nm, met) for (r, nm, met, sh) in same_sheet if met == new_metric]
-
-            def _max_rev(entries: List[Tuple[int,str,str]]) -> Optional[int]:
-                return max((rv for (rv, _, _) in entries), default=None)
-
-            max_mi = _max_rev(same_sheet_mi)
-            max_dn = _max_rev(same_sheet_dn)
-            own_max = _max_rev(same_sheet_same_metric)
-
-            # ---- revisioni precedenti rispetto altro gruppo ----
-            other_entries = same_sheet_dn if new_group == "MI" else same_sheet_mi
-            other_max = max_dn if new_group == "MI" else max_mi
-            if other_max is not None and new_rev_i < other_max:
-                ref = next((nm for (rv, nm, _met) in other_entries if rv == other_max), "")
-                log_error(cfg, name, "Revisione Precendente", ref)
-                move_to(p, cfg.ERROR_DIR)
-                return True
-
-            # ---- revisioni precedenti rispetto stessa metrica ----
-            if own_max is not None and new_rev_i < own_max:
-                ref = next((nm for (rv, nm, _met) in same_sheet_same_metric if rv == own_max), "")
-                log_error(cfg, name, "Revisione Precendente", ref)
-                move_to(p, cfg.ERROR_DIR)
-                return True
-
-            # ---- conflitti pari rev ----
-            same_rev_mi = [(rv, nm, met) for (rv, nm, met) in same_sheet_mi if rv == new_rev_i]
-            same_rev_dn = [(rv, nm, met) for (rv, nm, met) in same_sheet_dn if rv == new_rev_i]
-
-            if new_group == "MI":
-                if same_rev_dn:
-                    ref = same_rev_dn[0][1]
-                    log_error(cfg, name, "Conflitto Metrica (DN a pari revisione)", ref)
-                    move_to(p, cfg.ERROR_DIR)
-                    return True
-                other_mi = next((nm for (_rv, nm, met) in same_rev_mi if met != new_metric), None)
-                if other_mi:
-                    log_swarky(cfg, name, tiflog, "Metrica Diversa", other_mi)
-            else:
-                if same_rev_mi:
-                    ref = same_rev_mi[0][1]
-                    log_error(cfg, name, "Conflitto Metrica (MI a pari revisione)", ref)
-                    move_to(p, cfg.ERROR_DIR)
-                    return True
-                other_dn = next((nm for (_rv, nm, met) in same_rev_dn if met != new_metric), None)
-                if other_dn:
-                    log_error(cfg, name, "Conflitto Metrica (D/N a pari revisione)", other_dn)
-                    move_to(p, cfg.ERROR_DIR)
-                    return True
-
-            # ---- STORICIZZAZIONI (pianifica, esegui FUORI lock) ----
-            if own_max is None or new_rev_i > own_max:
-                for rv, nm, _met in same_sheet_same_metric:
-                    if rv < new_rev_i:
-                        to_storico_same.append((dir_tif_loc / nm, _storico_dest_dir_for_name(cfg, nm), nm))
-            if other_max is not None and new_rev_i > other_max:
-                for rv, nm, _met in other_entries:
-                    if rv < new_rev_i:
-                        to_storico_other.append((dir_tif_loc / nm, _storico_dest_dir_for_name(cfg, nm), nm))
-
-            # ---- ACCETTAZIONE del NUOVO (rimane nel lock per coerenza) ----
-            with timeit(f"{name} move_to_archivio"):
-                move_to(p, dir_tif_loc)
-                new_path = dir_tif_loc / name
-
-        # ============ FUORI DAL LOCK: ESEGUO GLI SPOSTAMENTI LENTI ============
         if to_storico_same:
-            with timeit(f"{name} move_old_revs_same_metric"):
+            with ui_phase(f"{name} • move_old_revs_same_metric"):
                 for old_path, dest_dir, nm in to_storico_same:
                     try:
                         copied, rc = move_to_storico_safe(old_path, dest_dir)
@@ -709,7 +754,7 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
                         logging.exception("Storico (same metric): %s → %s: %s", old_path, dest_dir, e)
 
         if to_storico_other:
-            with timeit(f"{name} move_old_revs_other_group"):
+            with ui_phase(f"{name} • move_old_revs_other_group"):
                 for old_path, dest_dir, nm in to_storico_other:
                     try:
                         copied, rc = move_to_storico_safe(old_path, dest_dir)
@@ -726,14 +771,14 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
                     except Exception as e:
                         logging.exception("Storico (other grp): %s → %s: %s", old_path, dest_dir, e)
 
-        # fuori dal lock: PLM + EDI + log finale
-        with timeit(f"{name} link/copy_to_PLM"):
+        # ---- PLM + EDI ----
+        with ui_phase(f"{name} • link/copy_to_PLM"):
             try:
                 _fast_copy_or_link(new_path, cfg.PLM_DIR / name)
             except Exception as e:
                 logging.exception("PLM copy/link fallita per %s: %s", new_path, e)
 
-        with timeit(f"{name} write_EDI"):
+        with ui_phase(f"{name} • write_EDI"):
             try:
                 write_edi(cfg, name, cfg.PLM_DIR, m=m, loc=loc)
             except Exception as e:
@@ -745,35 +790,6 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
     except Exception:
         logging.exception("Errore inatteso per %s", p)
         return False
-
-def archive_once(cfg: Config) -> bool:
-    start = time.time()
-    did_something = False
-
-    with timeit("scan candidati (hplotter)"):
-        candidates: List[Path] = list(_iter_candidates(cfg.DIR_HPLOTTER, cfg.ACCEPT_PDF))
-
-    # Workers: conservativi su SMB (meglio 1; max 2)
-    workers_env = os.environ.get("SWARKY_WORKERS", "1")
-    try:
-        workers = int(workers_env)
-    except ValueError:
-        workers = 1
-    workers = max(1, min(workers, 2))
-    logging.debug("Workers: %d", workers)
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(_process_candidate, p, cfg) for p in candidates]
-        for fut in as_completed(futures):
-            try:
-                did_something |= fut.result()
-            except Exception:
-                logging.exception("Errore nel worker")
-
-    with _DOC_LOCKS_MASTER:
-        _DOC_LOCKS.clear()
-
-    return did_something
 
 # ---- ISS / FIV ----------------------------------------------------------------------
 
@@ -875,12 +891,24 @@ def count_tif_files(cfg: Config) -> dict:
 def run_once(cfg: Config) -> bool:
     start_all = time.time()
 
-    did_arch = archive_once(cfg)
+    with ui_phase("Scan candidati (hplotter)"):
+        candidates: List[Path] = list(_iter_candidates(cfg.DIR_HPLOTTER, cfg.ACCEPT_PDF))
+
+    did_something = False
+    for p in candidates:
+        try:
+            did_something |= _process_candidate(p, cfg)
+        except Exception:
+            logging.exception("Errore nel processing")
+
+    did_arch = did_something
     did_iss  = iss_loading(cfg)
     did_fiv  = fiv_loading(cfg)
 
     elapsed_all = time.time() - start_all
-    _append_filelog_line(f"ProcessTime # {elapsed_all:.2f}s")
+    minutes = int(elapsed_all // 60)
+    seconds = int(elapsed_all % 60)
+    _append_filelog_line(f"ProcessTime # {minutes:02d}:{seconds:02d}")
 
     _flush_file_log(cfg)
 
@@ -908,14 +936,10 @@ def load_config(path: Path) -> Config:
     data = json.loads(path.read_text(encoding="utf-8"))
     return Config.from_json(data)
 
-from perf import enable
-
 def main(argv: List[str]):
     args = parse_args(argv)
     cfg = load_config(Path("config.json"))
     setup_logging(cfg)
-
-    enable(True)  # attiva i timer (puoi disattivarli da perf.enable(False))
 
     if args.watch > 0:
         watch_loop(cfg, args.watch)
