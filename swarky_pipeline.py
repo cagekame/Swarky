@@ -100,6 +100,12 @@ def _process_candidate(p: Path, cfg: Config) -> bool:
         new_group = "MI" if new_metric in MI else "DN"
         new_rev_i = int(new_rev)
 
+        # ---- Revisione 00: segnala in GUI/log, lascia il file in Hplotter ----
+        # Eccezione: i file con location F (DAF) passano anche in rev 00
+        if new_rev_i == 0 and m.group(2).upper() != "F":
+            log_error(cfg, name, "Revisione 00 non processata")
+            return True
+
         # ---- Mappatura destinazione archivio ----
         with ui_phase(f"{name} • Map_Loc"):
             loc = map_location(m, cfg)

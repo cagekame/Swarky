@@ -413,12 +413,10 @@ def write_edi(
 ) -> None:
 
     edi = out_dir / (Path(file_name).stem + ".DESEDI")
-    if edi.exists():
-        return
     if iss_match is not None:
         g1 = iss_match.group(1); g2 = iss_match.group(2); g3 = iss_match.group(3)
         rev = iss_match.group(4); sheet = iss_match.group(5)
-        docno = f"G{g1}{g2}{g3}"
+        docno = f"G{g1}{g2}{g3}ISS"
         body = _edi_body(
             document_no=docno, rev=rev, sheet=sheet,
             description=" Impeller Specification Sheet",
@@ -433,12 +431,12 @@ def write_edi(
             raise ValueError("write_edi: iss_style richiede 'm' oppure tutti gli override (document_no, rev, sheet)")
 
         if document_no_override is not None:
-            document_no = document_no_override
+            document_no = document_no_override + "ISS"
             rev = rev_override or ""
             sheet = sheet_override or ""
         else:
             assert m is not None
-            document_no = f"D{m.group(1)}{m.group(2)}{m.group(3)}"
+            document_no = f"D{m.group(1)}{m.group(2)}{m.group(3)}ISS"
             rev = rev_override or m.group(4)
             sheet = sheet_override or m.group(5)
 

@@ -216,6 +216,9 @@ class SwarkyApp:
         self.lbl_check_var      = tk.StringVar(value="N° Check Dwgs: 0")
         self.lbl_same_var       = tk.StringVar(value="N° Same Rev.: 0")
         self.lbl_drawings_var   = tk.StringVar(value="N° Drawings: 0")
+        self.lbl_fiv_var        = tk.StringVar(value="N° FIV: 0")
+        self.lbl_heng_var       = tk.StringVar(value="N° Hengelo: 0")
+        self.lbl_iss_var        = tk.StringVar(value="N° ISS: 0")
         self.plotter_lbl        = tk.StringVar(value="plotter")
         self.plotter_frame   = ttk.LabelFrame(self.root, text="Plotter")
         self.anomaly_frame   = ttk.LabelFrame(self.root, text="Anomalie")
@@ -224,6 +227,9 @@ class SwarkyApp:
         ttk.Label(self.plotter_frame, textvariable=self.lbl_check_var,      anchor="w").pack(side="bottom", fill="x")
         ttk.Label(self.plotter_frame, textvariable=self.lbl_same_var,       anchor="w").pack(side="bottom", fill="x")
         ttk.Label(self.plotter_frame, textvariable=self.lbl_drawings_var,   anchor="w").pack(side="bottom", fill="x")
+        ttk.Label(self.plotter_frame, textvariable=self.lbl_fiv_var,        anchor="w").pack(side="bottom", fill="x")
+        ttk.Label(self.plotter_frame, textvariable=self.lbl_heng_var,       anchor="w").pack(side="bottom", fill="x")
+        ttk.Label(self.plotter_frame, textvariable=self.lbl_iss_var,        anchor="w").pack(side="bottom", fill="x")
         self.controls        = ttk.Frame(self.root)
         self.plotter_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=(8,8))
         self.anomaly_frame.grid(row=0, column=1, sticky="nsew", padx=8, pady=8)
@@ -340,6 +346,20 @@ class SwarkyApp:
         self.lbl_same_var.set(f"N° Same Rev.: {stats.get('Same Rev Dwg', 0)}")
         self.lbl_check_var.set(f"N° Check Dwgs: {stats.get('Check Dwg', 0)}")
         self.lbl_plm_errors_var.set(f"N° PLM errors: {stats.get('Plm error Dwg', 0)}")
+
+        def _count_dir(directory, extensions: set) -> int:
+            try:
+                if not directory:
+                    return 0
+                return sum(1 for p in directory.iterdir() if p.is_file() and p.suffix.lower() in extensions)
+            except Exception:
+                return 0
+
+        fiv_heng_exts = {".tif", ".tiff", ".pdf"}
+        iss_exts = {".pdf"}
+        self.lbl_fiv_var.set(f"N° FIV: {_count_dir(self.cfg.DIR_FIV_LOADING, fiv_heng_exts)}")
+        self.lbl_heng_var.set(f"N° Hengelo: {_count_dir(self.cfg.DIR_HENGELO, fiv_heng_exts)}")
+        self.lbl_iss_var.set(f"N° ISS: {_count_dir(self.cfg.DIR_ISS, iss_exts)}")
         
     # ---------------- Plotter ----------------
     def refresh_plotter(self) -> None:

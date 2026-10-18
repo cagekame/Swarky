@@ -106,6 +106,7 @@ def iss_loading(cfg: Config) -> bool:
 
         except Exception as e:
             logging.exception("Impossibile processare ISS %s: %s", p.name, e)
+            log_error(cfg, p.name, f"Errore ISS: {e}")
 
         finally:
             try:
