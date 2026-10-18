@@ -1,5 +1,5 @@
-27/07/2026
-Aggiunti nuovi basename per ISS
+27/07/2026 — Aggiunti nuovi basename per ISS
+18/10/2026 — ISS tag DocumentNo, DAF rev00 exception, label FIV/Hengelo/ISS in GUI, errori ISS in Anomalie
 
 # Swarky — Regole di Archiviazione
 
